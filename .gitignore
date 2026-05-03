@@ -1,4 +1,8 @@
 *.o
+build/
 game_server
 __pycache__/
 .vscode/
+.claude/
+技术文档.md
+需求文档.md
