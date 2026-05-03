@@ -1,6 +1,7 @@
 *.o
 build/
-game_server
+nexus_server
+nexus_client
 __pycache__/
 .vscode/
 .claude/

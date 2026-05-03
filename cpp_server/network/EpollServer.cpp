@@ -2,7 +2,7 @@
 #include <cstring>
 #include <stdexcept>
 
-EpollServer::EpollServer(int _port,GameWorld* _world):port(_port),server_fd(-1),epoll_fd(-1),world(_world) {}
+EpollServer::EpollServer(int _port) : port(_port), server_fd(-1), epoll_fd(-1) {}
 EpollServer::~EpollServer() {
     if (server_fd != -1) close(server_fd);
     if (epoll_fd != -1) close(epoll_fd);
@@ -86,29 +86,8 @@ void EpollServer::Loop() {
                 ev.data.fd = client_fd;
                 epoll_ctl(epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
                 std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
-                world->AddPlayer(client_fd);
-                std::string reply_msg = "连接成功!你的号码是：" + std::to_string(client_fd) + " 你的坐标是(0,0)\n";
-                send(client_fd,reply_msg.c_str(),reply_msg.length(),0);
-            } else {
-                std::cout << "收到老玩家 (号码牌 " << current_fd << ") 的数据！" << std::endl;
-                char buffer[1024] = {0};
-
-                int bytes_read = recv(current_fd,buffer,sizeof(buffer),0);
-                if (bytes_read > 0) {
-                    std::cout<<"收到数据"<<" "<<buffer;
-                    std::string report = world->ProcessInput(current_fd, buffer);
-                    send(current_fd, report.c_str(), report.length(), 0);
-                } else if (bytes_read == 0) {
-                    std::cout<<"玩家"<<current_fd<<"跑路"<<std::endl;
-                    world->RemovePlayer(current_fd);
-                    epoll_ctl(epoll_fd,EPOLL_CTL_DEL,current_fd,nullptr);
-                    close(current_fd);
-                } else {
-                    std::cout<<"严重错误"<<std::endl;
-                    world->RemovePlayer(current_fd);
-                    epoll_ctl(epoll_fd,EPOLL_CTL_DEL,current_fd,nullptr);
-                    close(current_fd);
-                }
+            } else if (events[i].events & EPOLLIN) {
+                // TODO: 接入 Connection 类处理可读事件
             }
         }
     }
