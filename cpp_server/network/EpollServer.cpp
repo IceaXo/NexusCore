@@ -1,6 +1,6 @@
 #include "EpollServer.h"
-#include <cstring>
-#include <stdexcept>
+#include <cerrno>       // errno, EAGAIN
+#include <fcntl.h>      // fcntl, O_NONBLOCK
 
 EpollServer::EpollServer(int _port) : port(_port), server_fd(-1), epoll_fd(-1) {}
 EpollServer::~EpollServer() {
@@ -9,39 +9,35 @@ EpollServer::~EpollServer() {
 }
 
 bool EpollServer::Start() {
-    // 【第一步】：去电信局拿一部 IPv4 的 TCP 电话机
-    server_fd = socket(AF_INET,SOCK_STREAM,0);
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         std::cerr << "买电话机失败了！" << std::endl;
         return false;
     }
 
-    // 【极客黑科技】：端口复用 (SO_REUSEADDR)
-    // 很多小白写的服务器，一崩溃重启就报错“端口被占用”。加了这两行，允许我们光速重启服务器绑定同一个端口！
     int opt = 1;
-    setsockopt(server_fd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // 【第二步】：准备大楼地址和房间号
-    sockaddr_in server_addr{};  
-    server_addr.sin_family = AF_INET;  //地址家族：IPv4
-    server_addr.sin_addr.s_addr = INADDR_ANY;  //监听任意ip
-    server_addr.sin_port = htons(port);  //主机字节序转为大端序
+    sockaddr_in server_addr{};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
 
-    //插网线（Bind）
-    if (bind(server_fd,reinterpret_cast<sockaddr*>(&server_addr),sizeof(server_addr)) == -1)
-    {
-        std::cerr<<"绑定失败"<<std::endl;
+    if (bind(server_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == -1) {
+        std::cerr << "绑定失败" << std::endl;
         return false;
     }
 
-    //动作四：调成响铃模式（Listen）
-    if (listen(server_fd,SOMAXCONN) == -1) {
-        std::cerr<<"响铃失败"<<std::endl;
+    if (listen(server_fd, SOMAXCONN) == -1) {
+        std::cerr << "响铃失败" << std::endl;
         return false;
     }
+
+    // ET 模式必须非阻塞，否则 accept 在队列空时会卡死线程
+    int flags = fcntl(server_fd, F_GETFL, 0);
+    fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
 
     epoll_fd = epoll_create1(0);
-    //【第五步：雇佣大堂经理 Epoll】
     if (epoll_fd == -1) {
         std::cerr << "雇佣 Epoll 经理失败！" << std::endl;
         return false;
@@ -51,43 +47,134 @@ bool EpollServer::Start() {
     return true;
 }
 
-void EpollServer::Loop() {
-    std::cout<<"经理上班"<<std::endl;
+// ===================================================================
+//  ET 模式下循环 accept 直到 EAGAIN，设非阻塞，挂 EPOLLIN|EPOLLOUT|EPOLLET
+//  文档：HandleAccept —— 接收新连接，加入 connections，挂载 EPOLLIN
+// ===================================================================
+void EpollServer::HandleAccept() {
+    while (true) {
+        int client_fd = accept(server_fd, nullptr, nullptr);
+        if (client_fd == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+            std::cerr << "accept 出错" << std::endl;
+            break;
+        }
 
-    //步骤一：把大门挂上红黑树监控
-    epoll_event ev{};
+        int cflags = fcntl(client_fd, F_GETFL, 0);
+        fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
 
-    ev.events = EPOLLIN;
-    ev.data.fd = server_fd;
+        epoll_event ev{};
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+        ev.data.fd = client_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
 
-    if (epoll_ctl(epoll_fd,EPOLL_CTL_ADD,server_fd,&ev) == -1) {
-        std::cerr<<"没挂上红黑树"<<std::endl;
+        std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
+        connections.emplace(client_fd, client_fd);
+        // TODO: RoomManager::AddPlayer(client_fd);
+    }
+}
+
+// ===================================================================
+//  文档：HandleRead —— ReadFromSocket → 循环 ExtractMessage → RoomManager::OnMessage
+// ===================================================================
+void EpollServer::HandleRead(int fd) {
+    auto it = connections.find(fd);
+    if (it == connections.end()) return;
+
+    if (!it->second.ReadFromSocket()) {
+        std::cout << "玩家 " << fd << " 断开连接" << std::endl;
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+        close(fd);
+        connections.erase(it);
         return;
     }
 
-    //步骤二：准备“空盘子”数组
-    const int MAX_EVENTS = 10;
+    while (true) {
+        std::string json_msg = it->second.ExtractMessage();
+        if (json_msg.empty()) break;
+        std::cout << "收到完整JSON: " << json_msg << std::endl;
+        // TODO: RoomManager::OnMessage(fd, json_msg);
+    }
+}
+
+// ===================================================================
+//  EPOLLOUT 出口：查 Connection send_buffer 并刷出
+// ===================================================================
+void EpollServer::HandleWrite(int fd) {
+    auto it = connections.find(fd);
+    if (it != connections.end()) {
+        if (!it->second.WriteToSocket()) {
+            std::cout << "玩家 " << fd << " 写出错，断开" << std::endl;
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+            close(fd);
+            connections.erase(it);
+        }
+    }
+}
+
+// ===================================================================
+//  主循环：注册 server_fd + IPC，死循环 epoll_wait，按 fd 分发给三个 Handler
+// ===================================================================
+void EpollServer::Loop() {
+    std::cout << "经理上班" << std::endl;
+
+    // 步骤一：把大门挂上 epoll 红黑树（ET 边缘触发）
+    epoll_event ev{};
+    ev.events = EPOLLIN | EPOLLET;
+    ev.data.fd = server_fd;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, server_fd, &ev) == -1) {
+        std::cerr << "没挂上红黑树" << std::endl;
+        return;
+    }
+
+    // 步骤二：连接 Python AI 进程，把 ipc_fd 也挂上 epoll
+    if (ipc_client.ConnectToAI(8081)) {
+        epoll_event ipc_ev{};
+        ipc_ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+        ipc_ev.data.fd = ipc_client.ipc_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, ipc_client.ipc_fd, &ipc_ev);
+        std::cout << "[EpollServer] IPC fd=" << ipc_client.ipc_fd << " 已注册到 epoll" << std::endl;
+    }
+
+    const int MAX_EVENTS = 1024;
     epoll_event events[MAX_EVENTS];
 
-    //步骤三：开启死循环与内核休眠
+    // 步骤三：死循环
     while (true) {
-        int num_ready = epoll_wait(epoll_fd,events,MAX_EVENTS,-1);
+        int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
         if (num_ready == -1) {
-            std::cerr<<"epoll等待出错"<<std::endl;
+            std::cerr << "epoll等待出错" << std::endl;
             return;
         }
 
-        //步骤四：高并发路由的核心分流
         for (int i = 0; i < num_ready; ++i) {
-            int current_fd = events[i].data.fd;
-            if (current_fd == server_fd) {
-                int client_fd = accept(server_fd,nullptr,nullptr);
-                ev.events = EPOLLIN;
-                ev.data.fd = client_fd;
-                epoll_ctl(epoll_fd,EPOLL_CTL_ADD,client_fd,&ev);
-                std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
-            } else if (events[i].events & EPOLLIN) {
-                // TODO: 接入 Connection 类处理可读事件
+            int fd = events[i].data.fd;
+            uint32_t revents = events[i].events;
+
+            if (fd == server_fd) {
+                HandleAccept();
+            } else if (fd == ipc_client.ipc_fd) {
+                if (revents & EPOLLIN) {
+                    if (!ipc_client.ReadFromSocket()) {
+                        std::cerr << "[EpollServer] IPC 连接断开" << std::endl;
+                        continue;
+                    }
+                    std::string decision = ipc_client.ExtractAIDecision();
+                    if (!decision.empty()) {
+                        std::cout << "[EpollServer] 收到 AI 决策: " << decision << std::endl;
+                        // TODO: 转发给 RoomManager
+                    }
+                }
+                if (revents & EPOLLOUT) {
+                    ipc_client.FlushSendBuffer();
+                }
+            } else {
+                if (revents & EPOLLIN) {
+                    HandleRead(fd);
+                }
+                if (revents & EPOLLOUT) {
+                    HandleWrite(fd);
+                }
             }
         }
     }

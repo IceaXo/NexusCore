@@ -157,6 +157,17 @@ python3 stress_test.py   # 100 并发 TCP 连接
   - 构建系统切换至 CMake (C++14)，输出 `nexus_server`
   - `.gitignore` 完善：排除构建产物、IDE 配置、内部设计文档
 
+- **feat**: 实现网络层与 IPC 通信层完整功能
+  - `Connection` — `ReadFromSocket()` 死循环 recv 至 EAGAIN，`ExtractMessage()` 4 字节大端包头粘包切割，`WriteToSocket()` 从 send_buffer 刷出
+  - `IPCClient` — `ConnectToAI()` 主动连接 Python 进程，`SendSnapshot()` 打包 [4B包头+JSON] 非阻塞发送，`ReadFromSocket()` 收包，`ExtractAIDecision()` 切完整帧
+  - `EpollServer` — `HandleAccept()` ET 循环 accept，`HandleRead()`/`HandleWrite()` 按 fd 路由分发至 Connection 或 IPCClient
+  - `main.cpp` 组装 EpollServer 并启动事件循环
+
+- **fix**: 修复网络层两处数据丢失隐患
+  - `IPCClient::SendSnapshot()` — `send()` 返回 EAGAIN 时原逻辑直接 return false 丢弃整包，修复为完整暂存 `send_buffer` 等 EPOLLOUT 续发
+  - `EpollServer::Loop()` — 玩家 fd 的 EPOLLIN/EPOLLOUT 使用 else-if 链，同事件双标志置位时 EPOLLOUT 被跳过，修复为独立 if 分支
+  - 清理 `HandleWrite()` 不可达 IPC 死代码，更新 `Connection.h` 过期注释
+
 - **docs**: 编写项目 README，覆盖核心架构、目录结构、性能指标、构建部署与工作日志
 
 ### 2026-05-03
