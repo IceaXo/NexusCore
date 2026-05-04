@@ -10,36 +10,29 @@
 
 ## 核心架构
 
-```
-                          ┌─────────────────────┐
-                          │    client_ui/        │
-                          │  Raylib 几何渲染      │
-                          │  零贴图 · 朋克视觉     │
-                          └──────────┬──────────┘
-                                     │ TCP (4B 大端长度头 + JSON)
-                                     ▼
-┌────────────────────────────────────────────────────────────┐
-│                      cpp_server/                            │
-│                                                             │
-│  ┌───────────────┐   ┌──────────────────┐   ┌────────────┐ │
-│  │   network/    │──▶│     game/        │◀──│   main.cpp │ │
-│  │ Epoll ET 调度  │   │ RoomManager 池   │   │   入口组装  │ │
-│  │ Connection 粘包│   │ Room 状态机      │   └────────────┘ │
-│  └───────────────┘   │ CardRule 位运算   │                  │
-│                      └────────┬─────────┘                   │
-│  ┌───────────────┐           │                              │
-│  │     ipc/      │◀──────────┘                              │
-│  │ C++ ↔ Python  │                                          │
-│  └───────┬───────┘                                          │
-└──────────┼──────────────────────────────────────────────────┘
-           │ local TCP (127.0.0.1)
-                                ▼
-                     ┌─────────────────────┐
-                     │     py_agent/        │
-                     │  agent_brain.py      │
-                     │  DeepSeek V4 Pro API │
-                     │  断线 AI 无缝接管     │
-                     └─────────────────────┘
+```mermaid
+graph TD
+    subgraph client["client_ui/"]
+        UI[UIRenderer<br/>纯代码几何绘图<br/>零贴图·朋克视觉]
+    end
+
+    subgraph server["cpp_server/"]
+        NET[network/<br/>EpollServer<br/>Connection 粘包]
+        GAME[game/<br/>RoomManager 对象池<br/>Room 状态机<br/>CardRule 位运算]
+        IPC[ipc/<br/>IPCClient<br/>C++ ↔ Python 桥接]
+        MAIN[main.cpp<br/>入口组装]
+
+        NET -->|分发消息| GAME
+        MAIN -->|启动| NET
+        GAME -->|AI 托管触发| IPC
+    end
+
+    subgraph agent["py_agent/"]
+        BRAIN[agent_brain.py<br/>DeepSeek V4 Pro API<br/>断线 AI 无缝接管]
+    end
+
+    UI -->|"TCP (4B包头 + JSON)"| NET
+    IPC -->|"local TCP (127.0.0.1)"| BRAIN
 ```
 
 ### 网络层 (`network/`)
