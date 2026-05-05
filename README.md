@@ -147,6 +147,28 @@ python3 stress_test.py   # 100 并发 TCP 连接
 
 ## 工作日志
 
+### 2026-05-06
+
+- **feat**: CardRule 牌型引擎完整实现与规则对齐
+  - 实现 `CanBeat()` 压制判定：王炸 > 炸弹(先比张数4>3，同张比点数) > 普通牌型；顺子比最小点数（同起点更长可压、起点更高须等长/更长，拦短压长）；飞机同K同翅型比主体最小点数；三带一/三带二/四带二/四带两对比主体点数
+  - 实现 `SortHand()` 手牌排序：按点数升序、同点数按花色升序（方块<梅花<红桃<黑桃>），王天然排尾
+  - 实现 `GetHints()` 提示生成：自由出牌枚举所有合法牌型；桌面有牌时按场景（炸弹/普通/顺子/飞机）搜索可压组合；结果按牌力从小到大排序
+  - 新增 `AIRPLANE` 飞机牌型（K≥2 组连续三张，纯/带单翅/带对翅）与 `QUAD_TWO_PAIRS` 四带两对牌型（4+2对=8张）
+  - 修正顺子/连对不含 2 和王（搜索范围 0~11），对齐规则文档
+  - 修正 `CanBeat` 使用 `BodyRank()` 提取主体点数，避免复合牌型（三带一/四带二）kicker 干扰比较
+
+- **test**: 牌型规则全覆盖测试（446 项全部通过）
+  - `test_cardrule.cpp` — 手工精确测试 + 10,000 回合随机牌局模拟（3 玩家轮流出牌互压）
+  - `test_comprehensive.cpp` — 175 项全覆盖：识别/BodyRank/压制链/顺子边界/连对边界/飞机边界/跨级压制/非法牌型/GetHints/SortHand
+  - `test_types.cpp` — 63 项分类型专项：顺子(拦短压长)/飞机(同翅互压/不同翅不互压)/三带一/三带二/四带二/四带两对
+
+- **fix**: 网络层 & IPC 五处致命漏洞修复（Gemini 审计 + 自查）
+  - [#1 IPC 乱序] `IPCClient::SendSnapshot` — `send_buffer` 非空时新数据直接 `send()` 插队导致 TCP 字节流乱序。修复为检查队列非空时 `append` 到队尾
+  - [#2 4GB 核弹] `ExtractMessage` / `ExtractAIDecision` — `body_length` 无上限校验，恶意包头 `0xFFFFFFFF` 可致 OOM。修复为加入 `MAX_PACKET_SIZE=64KB` 强校验，超标标记 `bad_packet` 踢连接
+  - [#3 ET 部分发送] `WriteToSocket` / `FlushSendBuffer` — ET 模式下 `send()` 只调一次，部分发送后若 socket 仍可写则永不触发新 `EPOLLOUT`，残留数据永久滞留。修复为 `while(!empty)` 循环 `send()` 至 `EAGAIN`
+  - [#4 Epoll 鞭尸] `Loop()` — `HandleRead` 断开连接 `close(fd)` 后无保护继续执行 `HandleWrite(fd)`。修复为 `HandleRead` 返回 `bool`，断线回 `false` 时 `continue` 跳过写路径
+  - [#5 事件/注册] 新增 `EPOLLHUP|EPOLLERR` 显式处理；`HandleAccept` 中 `epoll_ctl` 返回值检查防 fd 泄漏；IPC 路径 `bad_packet` 检测
+
 ### 2026-05-04
 
 - **chore**: 重构项目目录结构，严格对齐技术文档物理布局

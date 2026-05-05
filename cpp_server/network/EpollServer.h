@@ -22,10 +22,10 @@ private:
     // ET 模式下循环 accept 直到 EAGAIN，设非阻塞，挂 EPOLLIN|EPOLLOUT|EPOLLET
     void HandleAccept();
 
-    // 从 fd 对应的 Connection 收包、切包，断线则清理
-    void HandleRead(int fd);
+    // 从 fd 对应的 Connection 收包、切包，断线或检测到恶意包时返回 false
+    bool HandleRead(int fd);
 
-    // 从 fd 对应的 Connection 或 IPCClient 刷 send_buffer
+    // 从 fd 对应的 Connection 刷 send_buffer
     void HandleWrite(int fd);
 
 public:

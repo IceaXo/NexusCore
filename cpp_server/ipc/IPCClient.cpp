@@ -73,22 +73,21 @@ bool IPCClient::ConnectToAI(int port) {
 //  里，由外层 Epoll 监听到 EPOLLOUT 时再接着发
 // ===================================================================
 bool IPCClient::SendSnapshot(const std::string& json_data) {
-    // TODO - 步骤 1：把 json_data 的长度转成大端序 4 字节包头
-    //         uint32_t net_len = htonl(json_data.size());
-    //         std::string packet(4, '\0');
-    //         std::memcpy(&packet[0], &net_len, 4);
-    //         packet.append(json_data);
     uint32_t net_len = htonl(json_data.size());
     std::string packet(4, '\0');
-    std::memcpy(&packet[0],&net_len, 4);
+    std::memcpy(&packet[0], &net_len, 4);
     packet.append(json_data);
-    // TODO - 步骤 2：send(ipc_fd, packet.data(), packet.size(), 0)
-    //         如果返回 -1 且 errno == EAGAIN，说明内核发送缓冲区满了
-    //         暂时返回 false，等下次 EPOLLOUT 再重试
+
+    // 致命：若 send_buffer 里还有旧数据排队，新帧必须 append 到队尾，
+    // 绝不能直接 send 插队，否则 TCP 字节流乱序，Python 端切出乱码。
+    if (!send_buffer.empty()) {
+        send_buffer.append(packet);
+        return true;
+    }
+
     ssize_t ret = send(ipc_fd, packet.data(), packet.size(), 0);
     if (ret == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // 内核发送缓冲区满了，整个 packet 暂存到 send_buffer，等 EPOLLOUT 时续发
             send_buffer.append(packet.data(), packet.size());
             return true;
         }
@@ -129,14 +128,15 @@ bool IPCClient::ReadFromSocket() {
 //  和 Connection::WriteToSocket() 一模一样的逻辑
 // ===================================================================
 bool IPCClient::FlushSendBuffer() {
-    if (send_buffer.empty()) return true;
-    ssize_t sent = send(ipc_fd, send_buffer.data(), send_buffer.size(), 0);
-    if (sent == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return true;
-        std::cerr << "[IPC] send 出错" << std::endl;
-        return false;
+    while (!send_buffer.empty()) {
+        ssize_t sent = send(ipc_fd, send_buffer.data(), send_buffer.size(), 0);
+        if (sent == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return true;
+            std::cerr << "[IPC] send 出错" << std::endl;
+            return false;
+        }
+        send_buffer.erase(0, sent);
     }
-    send_buffer.erase(0, sent);
     return true;
 }
 
@@ -147,18 +147,20 @@ bool IPCClient::FlushSendBuffer() {
 //  只是数据来源不同：Connection 来自外网玩家，IPCClient 来自本地 Python
 // ===================================================================
 std::string IPCClient::ExtractAIDecision() {
-    // TODO - 步骤 1：探针。recv_buffer.size() < 4 → return ""
-    if (recv_buffer.size() < 4)  return "";
-    // TODO - 步骤 2：解大端序。std::memcpy + ntohl 取 body_length
+    if (recv_buffer.size() < 4) return "";
+
     uint32_t raw;
-    std::memcpy(&raw,recv_buffer.data(),4);
+    std::memcpy(&raw, recv_buffer.data(), 4);
     uint32_t body_length = ntohl(raw);
-    // TODO - 步骤 3：验尸。recv_buffer.size() < 4 + body_length → return ""
+
+    if (body_length > MAX_PACKET_SIZE) {
+        bad_packet = true;
+        return "";
+    }
+
     if (recv_buffer.size() < 4 + body_length) return "";
-    // TODO - 步骤 4：切割。std::string decision = recv_buffer.substr(4, body_length)
-    std::string decision = recv_buffer.substr(4,body_length);
-    // TODO - 步骤 5：销毁。recv_buffer.erase(0, 4 + body_length)
-    recv_buffer.erase(0,4+body_length);
-    // TODO - 步骤 6：返回 decision
+
+    std::string decision = recv_buffer.substr(4, body_length);
+    recv_buffer.erase(0, 4 + body_length);
     return decision;
 }

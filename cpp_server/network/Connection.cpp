@@ -6,22 +6,22 @@
 #include <iostream>
 
 std::string Connection::ExtractMessage() {
-    // 步骤 1：探针。包头都没收全就回去继续等
     if (recv_buffer.size() < 4) return "";
 
-    // 步骤 2：解大端序。memcpy 把前 4 字节无损拷出，不依赖内存对齐
     uint32_t raw;
     std::memcpy(&raw, recv_buffer.data(), 4);
     uint32_t body_length = ntohl(raw);
-    // 步骤 3：验尸比对。如果 recv_buffer 的总大小 小于 (4 + body_length)
-    // 说明身体还没收全，是个半包。返回空字符串 "" 挂起等待。
-    if (recv_buffer.size()<4+body_length) return "";
-    // 步骤 4：精准切割。满足条件后，利用 substr 从索引 4 开始，截取 body_length 长度。
-    // 把它存进一个 std::string json_str 变量里。
-    std::string json_str = recv_buffer.substr(4,body_length);
-    // 步骤 5：彻底销毁。利用 erase 从索引 0 开始，抹杀掉 (4 + body_length) 个字节。
-    recv_buffer.erase(0,4+body_length);
-    // 步骤 6：返回你切出来的 json_str。
+
+    // 防 4GB 内存核弹：超过 MAX_PACKET_SIZE 的包直接标记坏连接，踢掉
+    if (body_length > MAX_PACKET_SIZE) {
+        bad_packet = true;
+        return "";
+    }
+
+    if (recv_buffer.size() < 4 + body_length) return "";
+
+    std::string json_str = recv_buffer.substr(4, body_length);
+    recv_buffer.erase(0, 4 + body_length);
     return json_str;
 }
 
@@ -59,13 +59,16 @@ bool Connection::ReadFromSocket() {
 }
 
 bool Connection::WriteToSocket(){
-    if (send_buffer.size() == 0) return true;
-    ssize_t sent = send(fd, send_buffer.data(), send_buffer.size(), 0);
-    if (sent == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return true;
-        std::cerr << "发送出错 fd=" << fd << std::endl;
-        return false;
+    // ET 模式必须循环 send 直到 EAGAIN，否则部分发送后残留数据
+    // 可能因 socket 仍可写而永不触发新的 EPOLLOUT
+    while (!send_buffer.empty()) {
+        ssize_t sent = send(fd, send_buffer.data(), send_buffer.size(), 0);
+        if (sent == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return true;
+            std::cerr << "发送出错 fd=" << fd << std::endl;
+            return false;
+        }
+        send_buffer.erase(0, sent);
     }
-    send_buffer.erase(0, sent);
     return true;
 }

@@ -66,7 +66,11 @@ void EpollServer::HandleAccept() {
         epoll_event ev{};
         ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
         ev.data.fd = client_fd;
-        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev);
+        if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) == -1) {
+            std::cerr << "epoll_ctl 注册失败 fd=" << client_fd << std::endl;
+            close(client_fd);
+            continue;
+        }
 
         std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
         connections.emplace(client_fd, client_fd);
@@ -77,24 +81,33 @@ void EpollServer::HandleAccept() {
 // ===================================================================
 //  文档：HandleRead —— ReadFromSocket → 循环 ExtractMessage → RoomManager::OnMessage
 // ===================================================================
-void EpollServer::HandleRead(int fd) {
+bool EpollServer::HandleRead(int fd) {
     auto it = connections.find(fd);
-    if (it == connections.end()) return;
+    if (it == connections.end()) return false;
 
     if (!it->second.ReadFromSocket()) {
         std::cout << "玩家 " << fd << " 断开连接" << std::endl;
         epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
         close(fd);
         connections.erase(it);
-        return;
+        return false;
     }
 
     while (true) {
         std::string json_msg = it->second.ExtractMessage();
+        // 检测到恶意超大包头，立刻踢掉
+        if (it->second.bad_packet) {
+            std::cerr << "玩家 " << fd << " 发送超大非法包，踢掉" << std::endl;
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+            close(fd);
+            connections.erase(it);
+            return false;
+        }
         if (json_msg.empty()) break;
         std::cout << "收到完整JSON: " << json_msg << std::endl;
         // TODO: RoomManager::OnMessage(fd, json_msg);
     }
+    return true;
 }
 
 // ===================================================================
@@ -151,12 +164,22 @@ void EpollServer::Loop() {
             int fd = events[i].data.fd;
             uint32_t revents = events[i].events;
 
+            // 挂断/错误：内核已关闭连接或发生异常
+            if (revents & (EPOLLHUP | EPOLLERR)) {
+                if (fd == ipc_client.ipc_fd) {
+                    std::cerr << "[EpollServer] IPC 连接异常 (HUP/ERR)" << std::endl;
+                } else if (fd != server_fd) {
+                    HandleRead(fd); // HandleRead 内部发现断线会清理
+                }
+                continue;
+            }
+
             if (fd == server_fd) {
                 HandleAccept();
             } else if (fd == ipc_client.ipc_fd) {
                 if (revents & EPOLLIN) {
-                    if (!ipc_client.ReadFromSocket()) {
-                        std::cerr << "[EpollServer] IPC 连接断开" << std::endl;
+                    if (!ipc_client.ReadFromSocket() || ipc_client.bad_packet) {
+                        std::cerr << "[EpollServer] IPC 连接断开或恶意包" << std::endl;
                         continue;
                     }
                     std::string decision = ipc_client.ExtractAIDecision();
@@ -169,10 +192,12 @@ void EpollServer::Loop() {
                     ipc_client.FlushSendBuffer();
                 }
             } else {
+                bool alive = true;
                 if (revents & EPOLLIN) {
-                    HandleRead(fd);
+                    alive = HandleRead(fd);
                 }
-                if (revents & EPOLLOUT) {
+                // 读失败说明已断线/踢掉，跳过 EPOLLOUT 避免鞭尸
+                if (alive && (revents & EPOLLOUT)) {
                     HandleWrite(fd);
                 }
             }
