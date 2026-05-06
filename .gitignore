@@ -7,3 +7,39 @@ __pycache__/
 .claude/
 技术文档.md
 需求文档.md
+规则文档.md
+
+# Test binaries & output
+cpp_server/game/test_cardrule
+cpp_server/game/test_comprehensive
+cpp_server/game/test_types
+cpp_server/test_cardrule_output.txt
+uitest_bin
+webview_poc
+
+# UI experiments / mockups
+client_ui/demo_showcase
+client_ui/demo_showcase.cpp
+client_ui/mockup_a_neon.html
+client_ui/mockup_b_brutal.html
+client_ui/mockup_c_cyber.html
+client_ui/p5_ui.html
+webview_poc.cpp
+uitest.cpp
+uitest.py
+index.html
+
+# Stress test scripts
+py_agent/stress_async.py
+py_agent/stress_mass.py
+py_agent/stress_rooms.py
+py_agent/test_client.py
+
+# Design notes
+cssui.md
+p5.md
+C++ UI渲染方案重构.md
+
+# Images
+image.png
+image(perfect).png

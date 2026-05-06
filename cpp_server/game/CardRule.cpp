@@ -62,12 +62,16 @@ CardType CardRule::EvaluateType(const std::vector<uint8_t>& cards) {
 
     case 8: {
         // 四带两对: 四张同点 + 两个对子
-        int quad_rank = -1, pairs = 0;
-        for (int r = 0; r <= 12; ++r) {
-            if (freq[r] >= 4) quad_rank = r;
-            else if (freq[r] >= 2) pairs++;
+        // 若有多个四张 (如 5555+6666), 每个都可作为主体，必须全部检查
+        for (int bodyR = 0; bodyR <= 12; ++bodyR) {
+            if (freq[bodyR] < 4) continue;
+            int pairs = 0;
+            for (int r = 0; r <= 14; ++r) {
+                if (r == bodyR) continue; // 主体占用 4 张，剩余为 0 (非王最大 4 张)
+                pairs += freq[r] / 2;
+            }
+            if (pairs >= 2) return CardType::QUAD_TWO_PAIRS;
         }
-        if (quad_rank != -1 && pairs >= 2) return CardType::QUAD_TWO_PAIRS;
         break;
     }
 
@@ -157,16 +161,20 @@ CardType CardRule::EvaluateType(const std::vector<uint8_t>& cards) {
 // 提取一手牌的主体点数 (用于压制比较)。
 // 三带一/三带二的主体是 triple 的点数，四带二是 quad 的点数，
 // 顺子/连对/飞机取连续序列的起点 (最小点数)。
+//
+// 三带/四带类采用倒序扫描 (r=14→0)：取最大符合条件点数作主体。
+// 防止降维打击 —— 若手牌含 555+666，倒序确保以 6 为主体，不会因正向扫
+// 先撞到 5 而丧失压制机会。
 static int BodyRank(const std::vector<uint8_t>& cards, CardType type) {
     if (type == CardType::ROCKET) return 14;
     int freq[15] = {0};
     for (uint8_t c : cards) freq[c / 4]++;
     if (type == CardType::TRIPLE_ONE || type == CardType::TRIPLE_TWO) {
-        for (int r = 0; r <= 14; ++r)
+        for (int r = 14; r >= 0; --r)
             if (freq[r] >= 3) return r;
     }
     if (type == CardType::QUAD_TWO || type == CardType::QUAD_TWO_PAIRS) {
-        for (int r = 0; r <= 14; ++r)
+        for (int r = 14; r >= 0; --r)
             if (freq[r] >= 4) return r;
     }
     // 飞机：找连续 triple 序列的起点，排除翅牌干扰
@@ -186,6 +194,86 @@ static int BodyRank(const std::vector<uint8_t>& cards, CardType type) {
     }
     // 单张/对子/炸弹：任一点数即牌力
     return cards[0] / 4;
+}
+
+// ---- 飞机结构枚举：穷举一副牌所有可能的 (连续组数K, 翅型, 主体起点) ----
+//
+// 同一组牌可能对应多种飞机解释。例如 555+666+777+888 (12张, 5678 全是三张)：
+//   K=4, wingKind=3 (纯飞机):    body=5678,         3*4=12
+//   K=3, wingKind=4 (单翅):      body=567, 翅=888,  3*3+3=12
+//   K=3, wingKind=4 (单翅):      body=678, 翅=555,  3*3+3=12
+//   K=2, wingKind=5 (对翅):      body=56,  翅=77+88,3*2+4=10 ≠12 ✗
+// 全部合法解释都会被枚举，CanBeat 逐解比对以找到压制路径。
+//
+// wingKind: 3=纯飞机(无翅), 4=带单翅(每主体带1单张), 5=带对翅(每主体带1对)
+// 判定逻辑与 EvaluateType 的飞机部分一致
+struct AirplaneInterp { int K, wingKind, bodyLo; };
+static std::vector<AirplaneInterp> GetAirplaneInterpretations(const std::vector<uint8_t>& cards) {
+    int f[15] = {0};
+    for (uint8_t c : cards) f[c / 4]++;
+    int size = (int)cards.size();
+    std::vector<AirplaneInterp> result;
+    for (int wingKind = 3; wingKind <= 5; ++wingKind) {
+        if (size % wingKind != 0) continue;
+        int K = size / wingKind;
+        if (K < 2) continue;
+        int remaining = size - K * 3;
+        for (int lo = 0; lo + K <= 12; ++lo) {
+            bool ok = true;
+            for (int r = lo; r < lo + K; ++r)
+                if (f[r] < 3) { ok = false; break; }
+            if (!ok) continue;
+            int extra = 0, pairs = 0;
+            for (int r = 0; r <= 14; ++r) {
+                int used = (r >= lo && r < lo + K) ? 3 : 0;
+                int rem = f[r] - used;
+                if (rem < 0) { ok = false; break; }
+                extra += rem;
+                pairs += rem / 2;
+            }
+            if (!ok) continue;
+            if (remaining == 0)
+                result.push_back({K, wingKind, lo});
+            else if (remaining == K && extra >= K)
+                result.push_back({K, wingKind, lo});
+            else if (remaining == 2 * K && pairs >= K)
+                result.push_back({K, wingKind, lo});
+        }
+    }
+    return result;
+}
+
+// ---- 四带两对主体枚举：返回所有可作为主体的点数 ----
+//
+// 为什么需要枚举多个主体？考虑 8 张牌 5555+6666：
+//   方案 A：以 5 为主体 (5555) + 对子来自 6666 (两对 66)
+//   方案 B：以 6 为主体 (6666) + 对子来自 5555 (两对 55)
+// 两种解释物理上都合法。本函数返回所有可行解，由上层（CanBeat/GetHints）
+// 逐解比对，不遗漏任一玩家可选策略。
+//
+// 算法：遍历 bodyR=0..12 作为候选主体，对每个候选——
+//   1. 必须有 ≥4 张 (freq[bodyR] >= 4)
+//   2. 累加其余点数的对子数: Σ freq[r] / 2  (主体点数直接跳过，非王最大 4 张已全占)
+//   3. 对子 ≥ 2 → 该候选是合法主体
+//
+// 示例：5555+6666 (freq[5]=4, freq[6]=4)
+//   bodyR=5: 5 跳过, freq[6]/2=2 → pairs=2 ✓ → 添加 5
+//   bodyR=6: 6 跳过, freq[5]/2=2 → pairs=2 ✓ → 添加 6
+// 返回 [5, 6]，玩家可任选其一作为主体
+static std::vector<int> GetQuadBodyRanks(const std::vector<uint8_t>& cards) {
+    int f[15] = {0};
+    for (uint8_t c : cards) f[c / 4]++;
+    std::vector<int> ranks;
+    for (int bodyR = 0; bodyR <= 12; ++bodyR) {
+        if (f[bodyR] < 4) continue;
+        int pairs = 0;
+        for (int r = 0; r <= 14; ++r) {
+            if (r == bodyR) continue; // 主体占用 4 张, 剩余为 0
+            pairs += f[r] / 2;
+        }
+        if (pairs >= 2) ranks.push_back(bodyR);
+    }
+    return ranks;
 }
 
 bool CardRule::CanBeat(const std::vector<uint8_t>& play_cards,
@@ -215,24 +303,25 @@ bool CardRule::CanBeat(const std::vector<uint8_t>& play_cards,
                         : play_cards.size() >= last_cards.size();
     }
 
-    // 飞机：同组数 K、同翅型，比主体最小点数
+    // 飞机：任一种相同 (K, 翅型) 解释下，主体起点更高即可压制
     if (play_type == CardType::AIRPLANE && last_type == CardType::AIRPLANE) {
-        auto getK = [](const std::vector<uint8_t>& v) {
-            int f[15] = {0};
-            for (auto c : v) f[c / 4]++;
-            int best = 0;
-            for (int lo = 0; lo <= 11; ++lo) {
-                int k = 0;
-                while (lo + k <= 11 && f[lo + k] >= 3) ++k;
-                if (k > best) best = k;
-            }
-            return best;
-        };
-        int pK = getK(play_cards), lK = getK(last_cards);
-        if (pK != lK) return false;
-        // 翅型必须一致: size/K  (3=纯, 4=单翅, 5=对翅)
-        if ((int)play_cards.size() / pK != (int)last_cards.size() / lK) return false;
-        return BodyRank(play_cards, play_type) > BodyRank(last_cards, last_type);
+        auto pi = GetAirplaneInterpretations(play_cards);
+        auto li = GetAirplaneInterpretations(last_cards);
+        for (auto& p : pi)
+            for (auto& l : li)
+                if (p.K == l.K && p.wingKind == l.wingKind && p.bodyLo > l.bodyLo)
+                    return true;
+        return false;
+    }
+
+    // 四带两对：多四张时 (如 5555+6666) 任一种主体更高即可压制
+    if (play_type == CardType::QUAD_TWO_PAIRS && last_type == CardType::QUAD_TWO_PAIRS) {
+        auto pBodies = GetQuadBodyRanks(play_cards);
+        auto lBodies = GetQuadBodyRanks(last_cards);
+        for (int pb : pBodies)
+            for (int lb : lBodies)
+                if (pb > lb) return true;
+        return false;
     }
 
     if (play_type != last_type || play_cards.size() != last_cards.size())
@@ -245,6 +334,16 @@ bool CardRule::CanBeat(const std::vector<uint8_t>& play_cards,
 // SortHand —— 手牌排序
 // ===================================================================
 void CardRule::SortHand(std::vector<uint8_t>& hand) {
+    // 排序规则：先按逻辑点数升序，同点数再按花色升序（方<梅<红<黑），王自然排在末尾
+    //
+    // 卡牌编码：card = rank*4 + suit
+    //   rank = card / 4   (0=3, 1=4, ..., 11=A, 12=2, 13=小王, 14=大王)
+    //   suit = card % 4   (0=方, 1=梅, 2=红, 3=黑)
+    //
+    // lambda 形参 a, b 是两张牌的编码值：
+    //   ra, rb — 先除 4 取出点数，点数不同则按点数排
+    //   a%4, b%4 — 点数相同时取余数（花色），按花色排
+    // 效果：手牌按 3333 4444 ... AAA 222 小王 大王 分组排列，视觉整齐，便于 AI 扫描
     std::sort(hand.begin(), hand.end(),
         [](uint8_t a, uint8_t b) {
             int ra = a / 4, rb = b / 4;
@@ -413,8 +512,8 @@ std::vector<std::vector<uint8_t>> CardRule::GetHints(
                 std::vector<uint8_t> v = body;
                 int pair_cnt = 0;
                 for (int r2 = 0; r2 <= 14 && pair_cnt < 2; ++r2) {
-                    int avail = (r2 == r) ? freq[r2] - 4 : freq[r2];
-                    if (avail >= 2) {
+                    if (r2 == r) continue; // 主体已占 4 张，同点数无剩余
+                    if (freq[r2] >= 2) {
                         auto p = take(r2, 2);
                         v.insert(v.end(), p.begin(), p.end());
                         pair_cnt++;
@@ -627,15 +726,17 @@ std::vector<std::vector<uint8_t>> CardRule::GetHints(
             }
             break;
 
-        case CardType::QUAD_TWO_PAIRS:
-            for (int r = target_rank + 1; r <= 12; ++r) {
-                if (freq[r] >= 4) {
+        case CardType::QUAD_TWO_PAIRS: {
+            auto lastBodies = GetQuadBodyRanks(last_cards);
+            for (int lb : lastBodies) {
+                for (int r = lb + 1; r <= 12; ++r) {
+                    if (freq[r] < 4) continue;
                     auto body = take(r, 4);
                     std::vector<uint8_t> v = body;
                     int pair_cnt = 0;
                     for (int r2 = 0; r2 <= 14 && pair_cnt < 2; ++r2) {
-                        int avail = (r2 == r) ? freq[r2] - 4 : freq[r2];
-                        if (avail >= 2) {
+                        if (r2 == r) continue; // 主体已占 4 张，同点数无剩余
+                        if (freq[r2] >= 2) {
                             auto p = take(r2, 2);
                             v.insert(v.end(), p.begin(), p.end());
                             pair_cnt++;
@@ -645,29 +746,19 @@ std::vector<std::vector<uint8_t>> CardRule::GetHints(
                 }
             }
             break;
+        }
 
         case CardType::AIRPLANE: {
-            auto getK = [](const std::vector<uint8_t>& v) {
-                int f[15] = {0};
-                for (auto c : v) f[c / 4]++;
-                int best = 0;
-                for (int lo = 0; lo <= 11; ++lo) {
-                    int k = 0;
-                    while (lo + k <= 11 && f[lo + k] >= 3) ++k;
-                    if (k > best) best = k;
-                }
-                return best;
-            };
-            int K = last_cards.empty() ? 0 : getK(last_cards);
-            // 翅型必须一致: target_size/K  (3=纯,4=单翅,5=对翅)
-            int wingKind = (K >= 2) ? (int)last_cards.size() / K : 0;
-            if (K >= 2 && wingKind >= 3 && wingKind <= 5) {
-            for (int lo = target_rank + 1; lo + K <= 12; ++lo) {
+            auto lastInterps = GetAirplaneInterpretations(last_cards);
+            for (auto& interp : lastInterps) {
+                int K = interp.K;
+                int wingKind = interp.wingKind;
+                int lLo = interp.bodyLo;
+                for (int lo = lLo + 1; lo + K <= 12; ++lo) {
                     bool ok = true;
                     for (int r = lo; r < lo + K; ++r)
                         if (freq[r] < 3) { ok = false; break; }
                     if (!ok) continue;
-                    // 纯飞机 (wingKind == 3)
                     if (wingKind == 3) {
                         std::vector<uint8_t> v;
                         for (int r = lo; r < lo + K; ++r) {
@@ -676,7 +767,6 @@ std::vector<std::vector<uint8_t>> CardRule::GetHints(
                         }
                         add(std::move(v));
                     }
-                    // 带单翅 (wingKind == 4)
                     else if (wingKind == 4) {
                         std::vector<uint8_t> v;
                         for (int r = lo; r < lo + K; ++r) {
@@ -692,7 +782,6 @@ std::vector<std::vector<uint8_t>> CardRule::GetHints(
                             }
                         }
                     }
-                    // 带对翅 (wingKind == 5)
                     else {
                         std::vector<uint8_t> body;
                         for (int r = lo; r < lo + K; ++r) {
