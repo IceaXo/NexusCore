@@ -10,30 +10,33 @@ __pycache__/
 规则文档.md
 
 # Test binaries & output
-cpp_server/game/test_cardrule
-cpp_server/game/test_comprehensive
-cpp_server/game/test_types
-cpp_server/test_cardrule_output.txt
+server/game/test_cardrule
+server/game/test_comprehensive
+server/game/test_types
+server/test_cardrule_output.txt
 uitest_bin
 webview_poc
 
 # UI experiments / mockups
-client_ui/demo_showcase
-client_ui/demo_showcase.cpp
-client_ui/mockup_a_neon.html
-client_ui/mockup_b_brutal.html
-client_ui/mockup_c_cyber.html
-client_ui/p5_ui.html
+client/demo_showcase
+client/demo_showcase.cpp
+client/mockup_a_neon.html
+client/mockup_b_brutal.html
+client/mockup_c_cyber.html
 webview_poc.cpp
 uitest.cpp
 uitest.py
 index.html
 
 # Stress test scripts
-py_agent/stress_async.py
-py_agent/stress_mass.py
-py_agent/stress_rooms.py
-py_agent/test_client.py
+server/agent/stress_async.py
+server/agent/stress_mass.py
+server/agent/stress_rooms.py
+server/agent/stress_test.py
+server/agent/test_client.py
+server/game/test_cardrule.cpp
+server/game/test_comprehensive.cpp
+server/game/test_types.cpp
 
 # Design notes
 cssui.md
