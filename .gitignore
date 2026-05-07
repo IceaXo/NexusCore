@@ -8,6 +8,7 @@ client/packages/
 
 # Test artifacts
 client/mock_server.log
+client/sim_log.txt
 __pycache__/
 .vscode/
 .claude/

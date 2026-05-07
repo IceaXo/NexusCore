@@ -363,6 +363,51 @@ body {
 .card-body.selected .card-center { color: var(--white); transform: scale(1.10); }
 .card-body.unselected.red .card-center { color: var(--blood); }
 
+/* Joker cards --- dual-tone, gold shimmer */
+.card-body.joker.unselected {
+  background: #1a1a1a;
+  border-color: #888;
+}
+.card-body.joker.big-joker.unselected {
+  background: #1a0000;
+  border-color: var(--blood);
+}
+.card-body.joker .card-topleft { color: #ccc; }
+.card-body.joker.big-joker .card-topleft { color: var(--blood); }
+.card-body.joker.selected .card-topleft { color: var(--white); }
+.card-body.joker.selected.big-joker .card-topleft { color: #ffd700; }
+
+.joker-star-center {
+  font-size: 78px !important;
+  opacity: 0.80;
+  transform: rotate(-8deg);
+}
+.card-body.joker.unselected .joker-star-center { color: #999; }
+.card-body.joker.big-joker.unselected .joker-star-center { color: var(--blood); }
+.card-body.joker.selected .joker-star-center { color: var(--white); }
+.card-body.joker.selected.big-joker .joker-star-center { color: #ffd700; }
+
+.tl-suit.joker-star {
+  font-size: 22px;
+  margin-top: -4px; margin-left: 4px;
+  color: inherit;
+}
+
+/* Gold shimmer */
+@keyframes jokerShimmer {
+  0%, 65%  { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
+  72%     { box-shadow: 6px 6px 0px 0px rgba(255,215,0,0.7); }
+  80%     { box-shadow: 10px 10px 0px 0px rgba(255,215,0,0.4); }
+  88%     { box-shadow: 4px 4px 0px 0px rgba(255,215,0,0.2); }
+  100%    { box-shadow: 8px 8px 0px 0px rgba(0,0,0,1); }
+}
+.card-body.joker.unselected {
+  animation: jokerShimmer 2.5s ease-in-out infinite;
+}
+.card-body.joker.big-joker.unselected {
+  animation: jokerShimmer 2.0s ease-in-out infinite;
+}
+
 /* ===================================================================
    Action Buttons — p5.md lines 186-202
    =================================================================== */
@@ -537,10 +582,17 @@ function cRank(c) { return Math.floor(c/4); }
 function cSuit(c) { return c%4; }
 function rankStr(c) {
   let r = cRank(c);
-  return r < 13 ? RANK_NAMES[r] : (c === 53 ? 'SJ' : 'BJ');
+  if (c === 53 || c === 56) return 'J';
+  return RANK_NAMES[r];
 }
 function suitStr(c) { return SUIT_MAP[['S','H','D','C'][cSuit(c)]]; }
-function isRed(c) { let s = cSuit(c); return s === 1 || s === 2; }
+function isRed(c) {
+  if (c === 53) return false;
+  if (c === 56) return true;
+  let s = cSuit(c);
+  return s === 1 || s === 2;
+}
+function isJoker(c) { return c === 53 || c === 56; }
 
 function post(msg) {
   try {
@@ -594,7 +646,9 @@ function renderHand() {
       if (!selectedSet.has(i)) wrap.style.transform = `rotate(${angle}deg)`;
     });
 
-    let isCardRed = isRed(cards[i]);
+    let cardVal = cards[i];
+    let isCardRed = isRed(cardVal);
+    let joker = isJoker(cardVal);
 
     // Glow overlay — p5.md lines 38-40
     let glow = document.createElement('div');
@@ -603,6 +657,8 @@ function renderHand() {
     // Card body — p5.md lines 44-67
     let body = document.createElement('div');
     body.className = 'card-body ' + (isSel ? 'selected' : 'unselected');
+    if (joker) body.classList.add('joker');
+    if (joker && isCardRed) body.classList.add('big-joker');
     if (!isSel && isCardRed) body.classList.add('red');
 
     // Texture lines
@@ -613,14 +669,24 @@ function renderHand() {
     // Top-left rank/suit
     let tl = document.createElement('div');
     tl.className = 'card-topleft';
-    tl.innerHTML = `<span class="tl-rank">${rankStr(cards[i])}</span>
-                    <span class="tl-suit">${suitStr(cards[i])}</span>`;
+    if (joker) {
+      tl.innerHTML = `<span class="tl-rank">${rankStr(cardVal)}</span>
+              <span class="tl-suit joker-star">★</span>`;
+    } else {
+      tl.innerHTML = `<span class="tl-rank">${rankStr(cardVal)}</span>
+              <span class="tl-suit">${suitStr(cardVal)}</span>`;
+    }
     body.appendChild(tl);
 
     // Center suit
     let center = document.createElement('div');
     center.className = 'card-center';
-    center.textContent = suitStr(cards[i]);
+    if (joker) {
+      center.textContent = '★';
+      center.classList.add('joker-star-center');
+    } else {
+      center.textContent = suitStr(cardVal);
+    }
     body.appendChild(center);
 
     wrap.appendChild(glow);
@@ -631,14 +697,14 @@ function renderHand() {
       if (selectedSet.has(i)) {
         selectedSet.delete(i);
         wrap.classList.remove('selected');
-        body.className = 'card-body unselected' + (isCardRed ? ' red' : '');
+        body.className = 'card-body unselected' + (isCardRed ? ' red' : '') + (joker ? ' joker' : '') + (joker && isCardRed ? ' big-joker' : '');
         wrap.style.zIndex = 10;
         wrap.style.transform = `rotate(${angle}deg)`;
         glow.style.display = 'none';
       } else {
         selectedSet.add(i);
         wrap.classList.add('selected');
-        body.className = 'card-body selected';
+        body.className = 'card-body selected' + (joker ? ' joker' : '') + (joker && isCardRed ? ' big-joker' : '');
         wrap.style.zIndex = 50;
         wrap.style.transform = 'translateY(-120px) rotate(0deg) scale(1.1)';
         glow.style.display = 'block';
