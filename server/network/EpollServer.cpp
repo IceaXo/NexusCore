@@ -1,5 +1,6 @@
 #include "EpollServer.h"
 #include <cerrno>       // errno, EAGAIN
+#include <ctime>        // time(nullptr) for heartbeat
 #include <fcntl.h>      // fcntl, O_NONBLOCK
 
 EpollServer::EpollServer(int _port) : port(_port), server_fd(-1), epoll_fd(-1) {}
@@ -95,6 +96,8 @@ bool EpollServer::HandleRead(int fd) {
         return false;
     }
 
+    it->second.last_active_time = time(nullptr);
+
     while (true) {
         std::string json_msg = it->second.ExtractMessage();
         // 检测到恶意超大包头，立刻踢掉
@@ -159,10 +162,24 @@ void EpollServer::Loop() {
 
     // 步骤三：死循环
     while (true) {
-        int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+        int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, 1000);
         if (num_ready == -1) {
             std::cerr << "epoll等待出错" << std::endl;
             return;
+        }
+
+        // 心跳超时检测：扫描所有连接，踢掉 30s 以上无消息的
+        for (auto it = connections.begin(); it != connections.end(); ) {
+            if (it->second.IsHeartbeatTimeout()) {
+                int stale_fd = it->first;
+                std::cout << "玩家 " << stale_fd << " 心跳超时，踢掉" << std::endl;
+                room_manager.RemovePlayer(stale_fd);
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, stale_fd, nullptr);
+                close(stale_fd);
+                it = connections.erase(it);
+            } else {
+                ++it;
+            }
         }
 
         for (int i = 0; i < num_ready; ++i) {

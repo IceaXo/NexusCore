@@ -75,6 +75,9 @@ public:
     // OnMessage 收尾检查：若当前回合是 AI 座位，自动触发决策。
     void CheckAndTriggerAI(int room_idx);
 
+    // 处理断线重连：在所有房间中搜索匹配 token
+    bool HandleReconnect(int fd, const std::string& token);
+
     // ================================================================
     //  查询
     // ================================================================
@@ -107,8 +110,8 @@ private:
 
     // ---- 内部辅助 ----
 
-    // 遍历 rooms，找第一个 state == WAITING 的房间索引，找不到返回 -1
-    int FindWaitingRoom() const;
+    // 遍历 rooms，找 WAITING 或 END 房间（END 房间先 ResetRoom 回收）
+    int FindWaitingRoom();
 
     // 在指定 Room 中找第一个 fd == -1 的空座位，找不到返回 -1
     static int FindEmptySeat(const Room& room);

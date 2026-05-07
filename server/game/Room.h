@@ -23,10 +23,11 @@ struct PlayerContext {
     std::vector<uint8_t> hand;          // 手牌数组，如 [0, 5, 12, 37, 53]
     bool is_landlord = false;           // 是否已确认为地主
     bool has_passed_bidding = false;    // 叫地主阶段是否已表态"不叫"
+    bool has_played = false;            // 是否出过牌（用于春天判定）
+    std::string reconnect_token;        // 断线重连令牌（入座时分配）
 
     bool IsHandEmpty() const { return hand.empty(); }
 
-    // 从 hand 中移除指定卡牌。调用前应确保 cards 中的每张牌都在 hand 中。
     void RemoveCards(const std::vector<uint8_t>& cards);
 };
 
@@ -109,6 +110,15 @@ public:
     // AI 在叫地主阶段自动表态（一律 PASS）
     void HandleAIBidding(int player_idx);
 
+    // 本局结束后重置房间，回到 WAITING 供下一局复用
+    void ResetRoom();
+
+    // 用给定 token 查找玩家座位，找不到返回 -1
+    int FindPlayerByToken(const std::string& token) const;
+
+    // 断线重连：该座位恢复 fd
+    void ReconnectPlayer(int player_idx, int new_fd);
+
     // ================================================================
     //  序列化
     // ================================================================
@@ -122,4 +132,6 @@ private:
     void DealCards(std::mt19937& rng);
     void BuildBidderQueue();       // 按方块点数构建叫地主候选人队列
     void DistributeBottomCards();
+    bool CheckSpring() const;      // 春天判定
+    std::string GenerateToken();   // 生成随机重连令牌
 };

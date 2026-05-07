@@ -3,7 +3,7 @@
 #include <algorithm>   // std::shuffle, std::find, std::sort
 #include <random>     // std::mt19937, std::random_device
 #include <sstream>    // std::ostringstream
-#include <cstring>    // std::memcpy (for JSON building if needed)
+#include <cstring>    // std::memcpy
 #include <arpa/inet.h> // htonl
 
 // ===================================================================
@@ -16,6 +16,71 @@ void PlayerContext::RemoveCards(const std::vector<uint8_t>& cards) {
             hand.erase(it);
         }
     }
+}
+
+// ===================================================================
+// Room::GenerateToken
+// ===================================================================
+std::string Room::GenerateToken() {
+    static const char hex[] = "0123456789abcdef";
+    std::string token(8, '\0');
+    std::mt19937 rng(std::random_device{}());
+    for (int i = 0; i < 8; ++i) {
+        token[i] = hex[rng() % 16];
+    }
+    return token;
+}
+
+// ===================================================================
+// Room::ResetRoom
+// ===================================================================
+void Room::ResetRoom() {
+    for (int i = 0; i < 5; ++i) {
+        players[i] = PlayerContext{};  // 清零所有字段，fd 变回 -1
+    }
+    current_turn = 0;
+    last_player_idx = -1;
+    pass_count = 0;
+    last_played_cards.clear();
+    bottom_cards.clear();
+    multiplier = 1;
+    bidder_queue.clear();
+    current_bidder_pos = 0;
+    landlord_count = 0;
+    state = RoomState::WAITING;
+}
+
+// ===================================================================
+// Room::FindPlayerByToken
+// ===================================================================
+int Room::FindPlayerByToken(const std::string& token) const {
+    if (token.empty()) return -1;
+    for (int i = 0; i < 5; ++i) {
+        if (players[i].reconnect_token == token && players[i].fd == -1) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// ===================================================================
+// Room::ReconnectPlayer
+// ===================================================================
+void Room::ReconnectPlayer(int player_idx, int new_fd) {
+    if (player_idx < 0 || player_idx >= 5) return;
+    players[player_idx].fd = new_fd;
+}
+
+// ===================================================================
+// Room::CheckSpring
+// ===================================================================
+bool Room::CheckSpring() const {
+    for (int i = 0; i < 5; ++i) {
+        if (!players[i].is_landlord && players[i].has_played) {
+            return false;  // 有农民出过牌，不是春天
+        }
+    }
+    return true;
 }
 
 // ===================================================================
@@ -96,6 +161,8 @@ void Room::StartGame() {
     for (int i = 0; i < 5; ++i) {
         players[i].is_landlord = false;
         players[i].has_passed_bidding = false;
+        players[i].has_played = false;
+        players[i].reconnect_token = GenerateToken();
     }
     landlord_count = 0;
     current_bidder_pos = 0;
@@ -300,6 +367,7 @@ void Room::HandlePlaying(int fd, const std::string& json) {
 
         // 出牌成功
         players[idx].RemoveCards(play_cards);
+        players[idx].has_played = true;
         last_played_cards = play_cards;
         last_player_idx = idx;
         pass_count = 0;
@@ -309,6 +377,9 @@ void Room::HandlePlaying(int fd, const std::string& json) {
 
     // 检查胜负
     if (players[idx].IsHandEmpty()) {
+        if (players[idx].is_landlord && CheckSpring()) {
+            multiplier *= 2;  // 春天翻倍
+        }
         state = RoomState::END;
         BroadcastState();
         return;
@@ -411,6 +482,7 @@ void Room::ExecuteAIDecision(int player_idx, const std::string& action,
         }
 
         players[player_idx].RemoveCards(cards);
+        players[player_idx].has_played = true;
         last_played_cards = cards;
         last_player_idx = player_idx;
         pass_count = 0;
@@ -420,6 +492,9 @@ void Room::ExecuteAIDecision(int player_idx, const std::string& action,
 
     // 检查胜负
     if (players[player_idx].IsHandEmpty()) {
+        if (players[player_idx].is_landlord && CheckSpring()) {
+            multiplier *= 2;
+        }
         state = RoomState::END;
         BroadcastState();
         return;
@@ -495,6 +570,12 @@ std::string Room::SerializeState(int player_idx) const {
     // multiplier
     ss << ",\"multiplier\":" << multiplier;
 
+    // reconnect_token (重连用)
+    ss << ",\"reconnect_token\":\"" << players[player_idx].reconnect_token << "\"";
+
+    // has_played (客户端判断春天态)
+    ss << ",\"has_played\":" << (players[player_idx].has_played ? "true" : "false");
+
     // BIDDING 阶段额外字段
     if (state == RoomState::BIDDING) {
         ss << ",\"first_bidder\":" << (bidder_queue.empty() ? -1 : bidder_queue[0]);
@@ -515,13 +596,39 @@ std::string Room::SerializeState(int player_idx) const {
 
     // END 阶段额外字段
     if (state == RoomState::END) {
-        // winner = 手牌为空的玩家
+        // winner
         for (int i = 0; i < 5; ++i) {
             if (players[i].IsHandEmpty()) {
                 ss << ",\"winner\":" << i;
+                ss << ",\"winner_is_landlord\":" << (players[i].is_landlord ? "true" : "false");
                 break;
             }
         }
+
+        // 结算分数
+        bool landlord_win = false;
+        for (int i = 0; i < 5; ++i) {
+            if (players[i].IsHandEmpty() && players[i].is_landlord) {
+                landlord_win = true;
+                break;
+            }
+        }
+        // 底分 × 倍数
+        int64_t base = multiplier;  // multiplier 已含炸弹/春天翻倍
+        ss << ",\"scores\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            int64_t score = 0;
+            if (landlord_win) {
+                // 地主赢: 每个地主从每个农民赢 base
+                score = players[i].is_landlord ? (3 * base) : (-2 * base);
+            } else {
+                // 农民赢: 每个农民从每个地主赢 base
+                score = players[i].is_landlord ? (-3 * base) : (2 * base);
+            }
+            ss << score;
+        }
+        ss << "]";
     }
 
     ss << "}";

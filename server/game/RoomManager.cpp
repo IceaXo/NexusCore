@@ -52,12 +52,20 @@ void RoomManager::BindSendCallback(Room& room) {
 // ===================================================================
 // RoomManager::FindWaitingRoom
 // ===================================================================
-int RoomManager::FindWaitingRoom() const {
+int RoomManager::FindWaitingRoom() {
+    // 优先找 WAITING 房间
     for (int i = 0; i < MAX_ROOMS; ++i) {
         if (rooms[i].state == RoomState::WAITING) {
             for (int j = 0; j < 5; ++j) {
                 if (rooms[i].players[j].fd == -1) return i;
             }
+        }
+    }
+    // 回收 END 房间
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        if (rooms[i].state == RoomState::END) {
+            rooms[i].ResetRoom();
+            return i;
         }
     }
     return -1;
@@ -160,6 +168,25 @@ void RoomManager::RemovePlayer(int fd) {
 // RoomManager::OnMessage
 // ===================================================================
 void RoomManager::OnMessage(int fd, const std::string& json) {
+    // 优先处理 RECONNECT 消息（玩家可能在 WAITING 房间，尚未入局）
+    if (json.find("\"RECONNECT\"") != std::string::npos ||
+        json.find("\"action\":\"RECONNECT\"") != std::string::npos) {
+        // 提取 token
+        size_t pos = json.find("\"token\"");
+        if (pos != std::string::npos) {
+            pos = json.find('"', pos + 7);  // 跳过 "token"
+            if (pos != std::string::npos) {
+                size_t end = json.find('"', pos + 1);
+                if (end != std::string::npos) {
+                    std::string token = json.substr(pos + 1, end - pos - 1);
+                    HandleReconnect(fd, token);
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
     auto it = fd_to_location.find(fd);
     if (it == fd_to_location.end()) return;
 
@@ -328,6 +355,41 @@ void RoomManager::ApplyAIDecision(const std::string& json) {
 
     // 执行后可能又轮到下一个 AI，递归检查
     CheckAndTriggerAI(room_idx);
+}
+
+// ===================================================================
+// RoomManager::HandleReconnect —— 断线重连
+// ===================================================================
+bool RoomManager::HandleReconnect(int fd, const std::string& token) {
+    if (token.empty()) return false;
+
+    // 遍历所有房间查找匹配 token 的断线座位
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        int player_idx = rooms[i].FindPlayerByToken(token);
+        if (player_idx == -1) continue;
+
+        // 清理新 fd 被 AddPlayer 临时分配的座位（重连先走 Accept→AddPlayer）
+        auto old = fd_to_location.find(fd);
+        if (old != fd_to_location.end()) {
+            rooms[old->second.room_idx].players[old->second.player_idx].fd = -1;
+            fd_to_location.erase(old);
+        }
+
+        // 恢复连接
+        rooms[i].ReconnectPlayer(player_idx, fd);
+        fd_to_location[fd] = {i, player_idx};
+        BindSendCallback(rooms[i]);
+
+        // 推送当前状态给重连玩家
+        if (rooms[i].on_send) {
+            rooms[i].on_send(fd, rooms[i].SerializeState(player_idx));
+        }
+
+        std::cout << "[RoomManager] 玩家 fd=" << fd << " 重连成功 room=" << i
+                  << " seat=" << player_idx << std::endl;
+        return true;
+    }
+    return false;
 }
 
 // ===================================================================
