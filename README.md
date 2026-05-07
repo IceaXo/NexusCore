@@ -59,9 +59,9 @@ graph TD
 - 提取 `my_hand` 与 `last_played_cards`，构造 Prompt 调用 DeepSeek V4 Pro API
 - 铁腕防幻觉兜底：AI 输出经 C++ 引擎 `CardRule` 二次校验，非法出牌自动拦截降级为 Pass
 
-### 客户端 (`client_ui/`)
+### 客户端 (`client/`)
 
-基于 Raylib 底层几何绘图 API，零贴图、纯代码实时渲染。红(#FF004D) / 黑(#1A1A1A) / 白(#F2F2F2) 撞色朋克风格。卡牌以倾斜平行四边形呈现，交互反馈靠颜色反转与坐标锐角偏移。
+Windows 原生 EXE，基于 Edge WebView2 内核内嵌 HTML/CSS/JS 渲染。红(#DC2626) / 黑(#000) / 白(#FFF) 撞色朋克风格。卡牌扇形排列+clip-path 倾斜切割，CSS radial-gradient 半调网点背景，纯硬边 box-shadow 印刷错位感，零圆角、零外部贴图。
 
 ---
 
@@ -69,26 +69,32 @@ graph TD
 
 ```
 NexusCore/
-├── cpp_server/                  # C++ 物理底座
-│   ├── main.cpp                 # 入口：组装并启动 EpollServer
-│   ├── CMakeLists.txt           # 构建脚本 (C++14, 递归编译子目录)
-│   ├── network/                 # 网络层：Epoll 调度 · 粘包切割
+├── server/                      # [Linux] C++ 高并发后端
+│   ├── main.cpp                 # 入口：组装并启动 EpollServer(:8080)
+│   ├── CMakeLists.txt           # 构建脚本 (C++14)
+│   ├── network/                 # 网络层：Epoll ET · 粘包切割
 │   │   ├── EpollServer.h/.cpp
 │   │   └── Connection.h/.cpp
 │   ├── game/                    # 逻辑层：状态机沙盒 · 规则引擎
 │   │   ├── RoomManager.h/.cpp
 │   │   ├── Room.h/.cpp
-│   │   └── CardRule.h/.cpp
+│   │   ├── CardRule.h/.cpp
+│   │   └── test_*.cpp           # 446 项规则测试
 │   └── ipc/                     # 跨进程通信：C++ ↔ Python 桥接
 │       └── IPCClient.h/.cpp
-├── py_agent/                    # Python AI 托管区
-│   ├── agent_brain.py           # 大模型具身决策代理
+├── server/agent/                # Python AI 托管区
+│   ├── agent_brain.py           # 大模型具身决策代理 (stub)
 │   ├── stress_test.py           # TCP 并发压力测试脚本
 │   └── requirements.txt
-├── client_ui/                   # 前端渲染引擎
-│   ├── main_client.cpp          # 客户端主循环与网络连接
-│   ├── UIRenderer.h/.cpp        # 纯代码几何绘图 (零贴图)
-│   └── CMakeLists.txt           # 构建脚本 (链接 raylib)
+├── client/                      # [Windows] C++ 客户端 + WebView2 UI
+│   ├── main_client.cpp          # 入口：串联 TcpClient ↔ WebViewHost
+│   ├── CMakeLists.txt           # VS2022 + WebView2 SDK 构建
+│   ├── network/                 # WinSock2 TCP 层
+│   │   └── TcpClient.h/.cpp
+│   ├── ui/                      # WebView2 宿主外壳 + JSBridge
+│   │   └── WebViewHost.h/.cpp
+│   └── html/                    # 前端静态资源
+│       └── p5_ui.html           # Void Gazer 风格纯 CSS/JS 界面
 └── README.md
 ```
 
@@ -115,31 +121,38 @@ NexusCore/
 |------|------|
 | C++ Server | Linux 2.6.32+ (epoll), g++ 5.0+, CMake 3.10+ |
 | Python Agent | Python 3.10+, `openai` |
-| Client UI | Raylib 4.0+, CMake 3.10+ |
+| Client UI | Windows 10/11, VS2022 Community+, WebView2 Runtime, CMake 3.15+ |
 
 ### 编译启动
 
 ```bash
-# ===== C++ 服务端 =====
-cd cpp_server
+# ===== C++ 服务端 (Linux / WSL2) =====
+cd server
 cmake -B build
 cmake --build build
 ./build/nexus_server
 
 # ===== Python AI 代理 =====
-cd py_agent
+cd server/agent
 pip install -r requirements.txt
 export DEEPSEEK_API_KEY="sk-xxx"
 python3 agent_brain.py
 
-# ===== 客户端 (开发中) =====
-cd client_ui
-cmake -B build
-cmake --build build
-./build/nexus_client
+# ===== Windows 客户端 =====
+# 前置：安装 WebView2 SDK
+nuget install Microsoft.Web.WebView2 -Version 1.0.2903.40 -OutputDirectory client/packages
+cd client
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+./build/Release/nexus_client.exe
+
+# ===== 端到端测试（Mock Server） =====
+cd client
+python test_mock_server.py      # 启动模拟服务器
+# 另开终端运行客户端，观察 TCP ↔ WebView2 全链路
 
 # ===== 压力测试 =====
-cd py_agent
+cd server/agent
 python3 stress_test.py   # 100 并发 TCP 连接
 ```
 
@@ -199,6 +212,30 @@ python3 stress_test.py   # 100 并发 TCP 连接
   - 实现 `GameWorld` 玩家状态管理（WASD 移动坐标）
   - 建立 `py_agent/` Python 代理目录，含 100 线程并发压力测试脚本 (`stress_test.py`)
   - 预留 `IPCClient` C++↔Python 跨进程通信接口桩
+
+---
+
+## 待办事项 (TODO)
+
+### 客户端 (`client/`)
+
+| # | 事项 | 优先级 | 说明 |
+|---|------|:------:|------|
+| 1 | **主界面 / 大厅** | 高 | 目前只有游戏内 UI (`p5_ui.html`)，缺少大厅界面：房间列表、创建/加入房间、玩家昵称设置。需要新增 `lobby.html` 或在 `p5_ui.html` 中增加大厅阶段 |
+| 2 | **心跳机制** | 高 | 客户端目前不发送心跳包。PRD 要求心跳丢失 5s 触发断线接管，需实现定时 Ping/Pong，服务端侧配合超时检测 |
+| 3 | **命令行参数** | 中 | 服务器 IP/端口硬编码在 `main_client.cpp`。应支持 `--server <ip> --port <port>` 参数解析 |
+| 4 | **断线重连** | 中 | `TcpClient` 断开后无自动重连逻辑，需实现指数退避重连 + 恢复游戏状态 |
+| 5 | **非阻塞 Socket** | 低 | 技术文档要求非阻塞 Socket 或 IOCP，当前用阻塞 `recv` + 独立线程。功能正确但不符合文档规定 |
+| 6 | **客户端测试** | 低 | `TcpClient` 和 `WebViewHost` 无单元测试，仅有 `test_mock_server.py` 端到端手动测试 |
+| 7 | **HTML 响应式适配** | 低 | `p5_ui.html` body 硬编码 1600×900px，无法自适应不同分辨率窗口 |
+
+### 服务端 (`server/`)
+
+| # | 事项 | 优先级 | 说明 |
+|---|------|:------:|------|
+| 8 | **AI 大脑实现** | 高 | `agent/agent_brain.py` 为空桩，需接入 DeepSeek API 实现具身决策 |
+| 9 | **BroadcastState 实现** | 高 | `Room::BroadcastState()` 和 `SerializeState()` 为骨架注释，需填充完整 JSON 序列化与广播逻辑 |
+| 10 | **完整出牌流程** | 高 | `Room::HandleBidding()` / `HandlePlaying()` 逻辑为伪代码注释，需实现 CALL/PASS 叫地主 + PLAY/PASS 出牌 |
 
 ---
 
