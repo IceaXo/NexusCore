@@ -255,11 +255,12 @@ class GameEngine:
                 self.pass_count = 0
                 self.current_turn = starter
                 return True  # skip turn advance
-                # Actually: the last player who played starts the new round
-                # We need to fix this -- let me keep the old last_player before reset
-                # Already handled above
 
-        # Advance to next player with cards
+        else:
+            # PING or unknown action — ignore, don't advance turn
+            return True
+
+        # Advance to next player with cards (only for PLAY/PASS, not unknown)
         if self.state == "PLAYING":
             self._advance_turn()
 

@@ -1,6 +1,4 @@
 #include "WebViewHost.h"
-#include <wrl/client.h>
-#include <wrl/implements.h>
 #include <iostream>
 
 static std::string WideToUtf8(LPCWSTR ws) {
