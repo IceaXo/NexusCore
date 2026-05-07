@@ -6,7 +6,7 @@
 class Connection {
 public:
     static constexpr uint32_t MAX_PACKET_SIZE = 64 * 1024; // 64KB 上限防 OOM
-    static constexpr time_t HEARTBEAT_TIMEOUT = 30;        // 30 秒无消息即断线
+    static constexpr time_t HEARTBEAT_TIMEOUT = 5;         // 心跳超时 5 秒（对齐需求文档）
 
     int fd;
     std::string recv_buffer; // 蓄水池
