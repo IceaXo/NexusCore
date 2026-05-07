@@ -68,8 +68,11 @@ def build_prompt(hand, last_played, last_player, is_landlord, multiplier):
 ## 你的身份
 你是【{identity}】。作为{identity}，你的目标是与盟友合作，率先出完所有手牌。
 
-## 你的手牌
+## 你的手牌(名称=编码)
 {hand_str}
+
+## 手牌编码对照(出牌时请用编码)
+{', '.join(f'{card_name(c)}={c}' for c in hand)}
 
 ## 手牌统计
 - 共 {len(hand)} 张
@@ -80,24 +83,23 @@ def build_prompt(hand, last_played, last_player, is_landlord, multiplier):
 
 ## 桌面状态
 - {"新一轮自由出牌" if is_new_round else f"需要压制: {last_str}"}
+  (需压制的牌编码: {last_played})
 
 ## 规则摘要
 - 牌型: 单张/对子/三带一/三带二/顺子(>=3张连续,不含2和王)/连对(>=2对连续)/飞机/四带二/炸弹(3或4张同点)/王炸
 - 压制: 同类型比点数大小; 顺子可同起点更长或更高起点; 炸弹可压任何普通牌型; 王炸最大
-- 炸弹不改变倍数显示，只管出牌策略
 - 如果你不能或不想出牌，返回 PASS
 
 ## 出牌决策
-你必须严格返回以下JSON格式(只返回JSON，不要其他文字):
-{{"action":"PLAY","cards":[卡牌编码列表]}}
+严格返回JSON(只返回JSON):
+{{"action":"PLAY","cards":[编码列表]}}
 或
 {{"action":"PASS"}}
 
 注意:
-- 卡牌编码: 0-51为普通牌(card/4=点数0=3, card%4=花色0=方), 53=小王, 56=大王
-- 如果是新一轮自由出牌，绝对不能PASS
-- 作为农民优先出小牌消耗地主大牌; 作为地主优先出大牌压制
-- 有炸弹时合理时机使用，顺子/连对尽量保留更长组合
+- 出牌编码必须从上方「手牌编码对照」中选择，绝对不能编造不存在的编码
+- 新一轮自由出牌时绝对不能PASS
+- 农民优先出小牌消耗地主大牌; 地主优先出大牌压制
 """
     return prompt
 

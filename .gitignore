@@ -34,6 +34,8 @@ server/agent/stress_async.py
 server/agent/stress_mass.py
 server/agent/stress_rooms.py
 server/agent/test_client.py
+server/agent/test_smoke.py
+server/agent/test_integration.py
 
 # Design notes
 cssui.md
