@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+:root { --blood:#dc2626; --black:#000; --white:#FFF; }
+html { background:#222; }
+body { margin:40px auto; width:max-content; }
+.p5-font { font-family:Impact,'Arial Black',sans-serif; letter-spacing:1px; }
+
+/* 1600x900 game canvas with visible border */
+#canvas {
+  position:relative; width:1600px; height:900px;
+  background:var(--black); overflow:visible;
+  outline:4px solid var(--blood);
+  box-shadow:0 0 0 8px rgba(220,38,38,0.4), 0 0 40px rgba(0,0,0,0.8);
+}
+
+/* Grid overlay */
+#canvas::before {
+  content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size:100px 100px;
+}
+
+/* Ruler marks */
+#canvas::after {
+  content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+  background:
+    linear-gradient(var(--blood) 2px, transparent 2px) 0 450px/100% 900px no-repeat,
+    linear-gradient(90deg, var(--blood) 2px, transparent 2px) 800px 0/1600px 100% no-repeat;
+  opacity:0.3;
+}
+
+.drag-item {
+  position:absolute; cursor:move; user-select:none; z-index:1;
+  border:1px dashed rgba(255,255,255,0.3); padding:4px;
+}
+.drag-item:hover { border-color:#ff0; z-index:999; }
+.drag-item .tag {
+  position:absolute; top:-16px; left:0; font-size:9px; color:#ff0;
+  white-space:nowrap; font-family:monospace; pointer-events:none;
+}
+
+/* Components */
+.av-box {
+  width:96px; height:96px; display:flex; align-items:center; justify-content:center;
+  border:5px solid; clip-path:polygon(15% 5%, 95% 0%, 90% 90%, 5% 95%);
+  font-size:56px; font-style:italic;
+}
+.av-ll { background:var(--white); border-color:var(--black); color:var(--blood); }
+.av-fm { background:var(--black); border-color:var(--white); color:var(--white); }
+.badge {
+  background:var(--blood); color:var(--white); padding:4px 16px; font-style:italic;
+  transform:skewX(-12deg); border:3px solid var(--white); font-size:20px;
+  box-shadow:6px 6px 0 rgba(0,0,0,1); width:max-content;
+}
+.badge span { transform:skewX(12deg); display:block; }
+.pname {
+  background:var(--black); padding:4px 24px; transform:rotate(-2deg);
+  border-left:8px solid var(--blood); box-shadow:4px 4px 0 rgba(0,0,0,1);
+  font-size:12px; color:var(--white); font-style:italic; letter-spacing:0.2em;
+  width:max-content;
+}
+.tcard {
+  width:48px; height:66px; background:var(--white); border:3px solid var(--black);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  font:italic 14px/1 Impact,'Arial Black',sans-serif;
+  color:var(--black); box-shadow:4px 4px 0 rgba(0,0,0,0.5);
+  flex-shrink:0;
+}
+.tcard.r { color:var(--blood); }
+.pass-badge {
+  background:var(--black); color:var(--white); padding:2px 10px;
+  border:2px solid var(--white); font:italic 12px Impact,sans-serif; letter-spacing:2px;
+}
+.pcard {
+  width:72px; height:104px; background:var(--white); border:4px solid var(--black);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  font:italic 28px/1 Impact,'Arial Black',sans-serif; color:var(--black);
+  box-shadow:8px 8px 0 rgba(0,0,0,0.5); flex-shrink:0; transform:rotate(-4deg);
+}
+.pcard:first-child { margin-left:0; }
+.pcard.r { color:var(--blood); }
+.pcard .ps { font-size:30px; }
+
+.p-mul {
+  background:var(--black); border:5px solid var(--white); padding:12px 40px;
+  transform:rotate(-3deg); box-shadow:10px 10px 0 rgba(220,38,38,1);
+}
+.p-pha {
+  background:var(--white); border:5px solid var(--black); padding:8px 30px; transform:rotate(2deg);
+}
+
+.btn-a {
+  position:relative; padding:10px 28px; cursor:pointer; border:none; background:none;
+}
+.btn-a .bg { position:absolute; inset:0; transform:skewX(-12deg); border:4px solid; }
+.btn-a.ps .bg { background:var(--white); border-color:var(--black); }
+.btn-a.ht .bg { background:var(--black); border-color:var(--white); box-shadow:6px 6px 0 rgba(220,38,38,1); }
+.btn-a.st .bg { background:var(--blood); border-color:var(--white); box-shadow:8px 8px 0 rgba(0,0,0,1); }
+.btn-a .tx { position:relative; z-index:1; font:italic 22px Impact,'Arial Black',sans-serif; text-transform:uppercase; white-space:nowrap; }
+.btn-a.ps .tx { color:var(--black); }
+.btn-a.ht .tx { color:var(--white); }
+.btn-a.st .tx { color:var(--white); font-size:32px; letter-spacing:0.08em; }
+
+#info {
+  position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:9999;
+  background:rgba(0,0,0,0.9); color:#0f0; font:12px monospace;
+  padding:6px 16px; border:1px solid #0f0; border-radius:4px;
+}
+</style>
+</head>
+<body>
+
+<div id="info">Drag elements | Press <b>O</b> to print all coords | Canvas: 1600x900 (red border)</div>
+
+<div id="canvas">
+
+<!-- ===== 5 PLAYER AVATARS + MINI CARDS ===== -->
+
+<!-- P1 (top-left area) -->
+<div class="drag-item" id="p1" style="left:80px;top:280px;"><div class="tag">p1</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:20px;">
+    <div class="av-fm">♟</div>
+    <div class="badge"><span>12</span></div>
+    <div class="pname"><span>SKULL</span></div>
+    <div style="display:flex;gap:-8px;" class="mini-row">
+      <div class="tcard">3<span>♦</span></div>
+      <div class="tcard r">K<span>♥</span></div>
+      <div class="tcard">A<span>♣</span></div>
+    </div>
+    <div class="pass-badge">PASS</div>
+  </div>
+</div>
+
+<!-- P2 (top area) -->
+<div class="drag-item" id="p2" style="left:320px;top:90px;"><div class="tag">p2</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:20px;">
+    <div class="av-ll">♛</div>
+    <div class="badge"><span>8</span></div>
+    <div class="pname"><span>PANTHER</span></div>
+    <div style="display:flex;gap:-8px;" class="mini-row">
+      <div class="tcard r">7<span>♥</span></div>
+    </div>
+    <div class="pass-badge">PASS</div>
+  </div>
+</div>
+
+<!-- P3 (top-right area) -->
+<div class="drag-item" id="p3" style="left:1120px;top:90px;"><div class="tag">p3</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:20px;">
+    <div class="av-fm">♟</div>
+    <div class="badge"><span>5</span></div>
+    <div class="pname"><span>FOX</span></div>
+    <div style="display:flex;gap:-8px;" class="mini-row">
+      <div class="tcard">5<span>♠</span></div>
+      <div class="tcard r">Q<span>♦</span></div>
+    </div>
+    <div class="pass-badge">PASS</div>
+  </div>
+</div>
+
+<!-- P4 (right area) -->
+<div class="drag-item" id="p4" style="left:1360px;top:280px;"><div class="tag">p4</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:20px;">
+    <div class="av-fm">♟</div>
+    <div class="badge"><span>10</span></div>
+    <div class="pname"><span>QUEEN</span></div>
+    <div style="display:flex;gap:-8px;" class="mini-row">
+      <div class="tcard">2<span>♣</span></div>
+    </div>
+    <div class="pass-badge">PASS</div>
+  </div>
+</div>
+
+<!-- P5 YOU (bottom-left area) -->
+<div class="drag-item" id="p5" style="left:80px;top:530px;"><div class="tag">p5 (YOU)</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:20px;">
+    <div class="av-fm">♟</div>
+    <div class="badge"><span>10</span></div>
+    <div class="pname"><span>JOKER (YOU)</span></div>
+    <div style="display:flex;gap:-8px;" class="mini-row">
+      <div class="tcard r">J<span>♥</span></div>
+      <div class="tcard">A<span>♠</span></div>
+    </div>
+    <div class="pass-badge">PASS</div>
+  </div>
+</div>
+
+<!-- ===== TOP PANELS ===== -->
+
+<div class="drag-item" id="multiplier" style="left:40px;top:40px;"><div class="tag">multiplier panel</div>
+  <div class="p-mul p5-font">
+    <div style="font-size:12px;color:var(--blood);font-style:italic;text-transform:uppercase;letter-spacing:0.5em;">Session Multiplier</div>
+    <div style="font-size:60px;color:var(--white);font-style:italic;margin-top:4px;letter-spacing:-0.03em;">X 512</div>
+  </div>
+</div>
+
+<div class="drag-item" id="phase" style="left:1300px;top:44px;"><div class="tag">phase indicator</div>
+  <div class="p-pha p5-font">
+    <div style="font-size:14px;color:var(--blood);font-style:italic;letter-spacing:3px;">ENGAGED!!</div>
+  </div>
+</div>
+
+<!-- ===== CENTER PLAYED CARDS ===== -->
+
+<div class="drag-item" id="center-cards" style="left:620px;top:400px;"><div class="tag">center played cards</div>
+  <div style="display:flex;gap:-8px;transform:skewX(-8deg);">
+    <div class="pcard"><span>3</span><span class="ps">♦</span></div>
+    <div class="pcard r"><span>K</span><span class="ps">♥</span></div>
+    <div class="pcard"><span>A</span><span class="ps">♠</span></div>
+    <div class="pcard r"><span>2</span><span class="ps">♥</span></div>
+  </div>
+</div>
+
+<!-- ===== ACTION BAR ===== -->
+
+<div class="drag-item" id="action-bar" style="left:600px;top:560px;"><div class="tag">action bar</div>
+  <div style="display:flex;gap:28px;">
+    <div class="btn-a ps"><div class="bg"></div><span class="tx p5-font">PASS</span></div>
+    <div class="btn-a ht"><div class="bg"></div><span class="tx p5-font">HINT</span></div>
+    <div class="btn-a st"><div class="bg"></div><span class="tx p5-font">STRIKE!!</span></div>
+  </div>
+</div>
+
+</div><!-- /canvas -->
+
+<script>
+let dragEl=null, ox=0, oy=0;
+document.addEventListener('mousedown',e=>{
+  let t=e.target.closest('.drag-item');
+  if(!t)return;
+  dragEl=t; t.style.zIndex=999;
+  let r=t.getBoundingClientRect(), cr=document.getElementById('canvas').getBoundingClientRect();
+  ox=e.clientX-r.left; oy=e.clientY-r.top;
+});
+document.addEventListener('mousemove',e=>{
+  if(!dragEl)return;
+  let cr=document.getElementById('canvas').getBoundingClientRect();
+  let nx=e.clientX-cr.left-ox, ny=e.clientY-cr.top-oy;
+  dragEl.style.left=nx+'px'; dragEl.style.top=ny+'px';
+  document.getElementById('info').textContent=
+    dragEl.id+' → left='+Math.round(nx)+'px  top='+Math.round(ny)+'px';
+});
+document.addEventListener('mouseup',()=>{dragEl=null;});
+
+document.addEventListener('keydown',e=>{
+  if(e.key!=='o'&&e.key!=='O')return;
+  let lines=[];
+  document.querySelectorAll('.drag-item').forEach(el=>{
+    lines.push(el.id+': {x:'+parseInt(el.style.left)+', y:'+parseInt(el.style.top)+'}');
+  });
+  console.log(lines.join('\n'));
+  alert(lines.join('\n'));
+});
+</script>
+</body></html>

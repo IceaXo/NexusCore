@@ -86,7 +86,7 @@ body {
    =================================================================== */
 .panel-multiplier {
   position: fixed; z-index: 50;
-  top: 40px; left: 40px;
+  top: 36px; left: 37px;
   background: var(--black);
   border: 5px solid var(--white);
   padding: 12px 40px;
@@ -109,7 +109,7 @@ body {
    =================================================================== */
 .panel-phase {
   position: fixed; z-index: 50;
-  top: 44px; right: 40px;
+  top: 48px; left: 1373px;
   background: var(--white);
   border: 5px solid var(--black);
   padding: 8px 30px;
@@ -210,16 +210,16 @@ body {
   overflow: visible;
 }
 .player-last-played .tiny-card {
-  width: 36px; height: 50px;
+  width: 48px; height: 66px;
   background: var(--white);
-  border: 2.5px solid var(--black);
+  border: 3px solid var(--black);
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   font-family: Impact, 'Arial Black', sans-serif;
-  font-size: 11px; font-style: italic; line-height: 1;
+  font-size: 14px; font-style: italic; line-height: 1;
   color: var(--black);
-  box-shadow: 3px 3px 0px 0px rgba(0,0,0,0.5);
-  margin-left: -6px;
+  box-shadow: 4px 4px 0px 0px rgba(0,0,0,0.5);
+  margin-left: -8px;
   flex-shrink: 0;
 }
 .player-last-played .tiny-card:first-child { margin-left: 0; }
@@ -228,27 +228,27 @@ body {
 /* Center played cards — current player */
 .center-played {
   position: fixed; z-index: 45;
-  top: 50%; left: 50%;
-  transform: translate(-50%,-50%) skewX(-8deg);
+  top: 395px; left: 647px;
+  transform: skewX(-8deg);
   display: flex; gap: -8px; flex-wrap: nowrap;
   pointer-events: none;
 }
 .center-played .played-card {
-  width: 56px; height: 80px;
+  width: 72px; height: 104px;
   background: var(--white);
-  border: 3px solid var(--black);
+  border: 4px solid var(--black);
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
   font-family: Impact, 'Arial Black', sans-serif;
   color: var(--black);
-  box-shadow: 6px 6px 0px 0px rgba(0,0,0,0.5);
-  margin-left: -10px;
+  box-shadow: 8px 8px 0px 0px rgba(0,0,0,0.5);
+  margin-left: -8px;
   flex-shrink: 0;
-  transform: rotate(-6deg);
+  transform: rotate(-4deg);
 }
 .center-played .played-card:first-child { margin-left: 0; }
-.center-played .played-card .p-rank { font-size: 20px; line-height: 1; }
-.center-played .played-card .p-suit { font-size: 22px; line-height: 1; }
+.center-played .played-card .p-rank { font-size: 28px; line-height: 1; }
+.center-played .played-card .p-suit { font-size: 30px; line-height: 1; }
 .center-played .played-card.red { color: var(--blood); }
 
 /* ===================================================================
@@ -486,8 +486,7 @@ body {
    =================================================================== */
 .action-bar {
   position: fixed; z-index: 100;
-  bottom: 310px; left: 50%;
-  transform: translateX(-50%);
+  top: 561px; left: 570px;
   display: flex; gap: 28px;
 }
 .btn-action {
@@ -542,6 +541,17 @@ body {
 .btn-hint:hover .btn-text   { color: var(--white); }
 .btn-strike .btn-text { color: var(--white); font-size: 32px; letter-spacing: 0.08em; }
 .btn-strike:hover .btn-text { color: var(--blood); }
+
+/* Waiting indicator at action bar position when not your turn */
+.waiting-indicator {
+  position: fixed; z-index: 100;
+  top: 561px; left: 570px;
+  font-size: 18px; font-style: italic;
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  transform: skewX(-8deg);
+}
 
 /* ===================================================================
    Scanlines — p5.md lines 222-226
@@ -609,7 +619,7 @@ body {
 <!-- Bidding Overlay -->
 <div class="bidding-overlay" id="bidding-overlay">
   <div class="bidding-label p5-font" id="bidding-label">CALL THE SHOT</div>
-  <div class="bidding-buttons">
+  <div class="bidding-buttons" id="bidding-buttons">
     <button class="btn-bid btn-call" onclick="P5.bidCall()">
       <div class="btn-bg"></div>
       <span class="btn-text">CALL</span>
@@ -620,6 +630,9 @@ body {
     </button>
   </div>
 </div>
+
+<!-- Waiting indicator (shown when it's not your turn) -->
+<div class="waiting-indicator p5-font" id="waiting-indicator" style="display:none;">WAITING...</div>
 
 <!-- Action Buttons -->
 <div class="action-bar" id="action-bar">
@@ -656,11 +669,11 @@ const SUIT_MAP  = { S:'♠', H:'♥', D:'♦', C:'♣' };
 const RANK_NAMES = ['3','4','5','6','7','8','9','10','J','Q','K','A','2','SJ','BJ'];
 const PLAYER_NAMES = ['SKULL','PANTHER','FOX','QUEEN','JOKER'];
 const PLAYER_POS = [
-  {x:80,  y:280},  // SKULL — left
-  {x:320, y:90},   // PANTHER — top-left
-  {x:1120,y:90},   // FOX — top-right
-  {x:1360,y:280},  // QUEEN — right
-  {x:80,  y:530}   // JOKER(ME) — bottom-left
+  {x:84,  y:239},  // pos 0 — left
+  {x:434, y:87},   // pos 1 — top-left
+  {x:1098,y:94},   // pos 2 — top-right
+  {x:1409,y:303},  // pos 3 — right
+  {x:43,  y:574}   // pos 4 — bottom-left (YOU)
 ];
 
 let state = null;
@@ -670,7 +683,8 @@ function cRank(c) { return Math.floor(c/4); }
 function cSuit(c) { return c%4; }
 function rankStr(c) {
   let r = cRank(c);
-  if (c === 53 || c === 56) return 'J';
+  if (c === 53) return 'SJ';
+  if (c === 56) return 'BJ';
   return RANK_NAMES[r];
 }
 function suitStr(c) { return SUIT_MAP[['S','H','D','C'][cSuit(c)]]; }
@@ -807,6 +821,7 @@ function renderHand() {
 
 // ===================================================================
 // Players — p5.md P5Avatar (lines 75-101)
+// me always anchored at bottom-left (PLAYER_POS[4]), others rotate
 // ===================================================================
 function renderPlayers() {
   let ctr = document.getElementById('player-nodes');
@@ -818,8 +833,9 @@ function renderPlayers() {
   let lp = state.player_last_played || {};
   let me = mySeat();
 
-  for (let i=0; i<5; i++) {
-    let p = PLAYER_POS[i];
+  for (let pos=0; pos<5; pos++) {
+    let i = (me + pos + 1) % 5;  // seat at this display position — me always at pos 4
+    let p = PLAYER_POS[pos];
     let node = document.createElement('div');
     node.className = 'player-node';
     if (cnt[i] === 0) node.classList.add('spectral');
@@ -829,6 +845,7 @@ function renderPlayers() {
 
     let isLL = ll.includes(i);
     let iconSymbol = isLL ? '♛' : '♟';
+    let label = (i === me) ? 'YOU' : PLAYER_NAMES[i];
 
     node.innerHTML =
       `<div class="player-box-wrap">
@@ -838,21 +855,34 @@ function renderPlayers() {
         </div>
         <div class="player-badge"><span class="badge-inner p5-font">${cnt[i]}</span></div>
       </div>
-      <div class="player-name"><span class="p5-font">${PLAYER_NAMES[i]}</span></div>`;
+      <div class="player-name"><span class="p5-font">${label}</span></div>`;
 
-    // Last played cards
-    let lpc = lp[i];
-    if (lpc && lpc.length > 0) {
+    // Last played cards / PASS indicator
+    // On new round (last_player===-1) show nothing. Otherwise only show
+    // cards that differ from the baseline (snapshot taken at new-round start).
+    let isFresh = !lastPlayedBaseline[i] || String(lp[i]) !== String(lastPlayedBaseline[i]);
+    if (state.last_player === -1) {
+      // new round — nothing to show
+    } else if (playerPassed[i]) {
       let lpd = document.createElement('div');
       lpd.className = 'player-last-played';
-      for (let c of lpc) {
-        let tc = document.createElement('div');
-        tc.className = 'tiny-card';
-        if (isRed(c)) tc.classList.add('red');
-        tc.innerHTML = `<span>${rankStr(c)}</span><span>${suitStr(c)}</span>`;
-        lpd.appendChild(tc);
-      }
+      lpd.style.cssText = 'background:var(--black);color:var(--white);padding:4px 12px;border:2px solid var(--white);font-family:Impact,sans-serif;font-size:14px;font-style:italic;letter-spacing:2px;';
+      lpd.textContent = 'PASS';
       node.appendChild(lpd);
+    } else if (isFresh) {
+      let lpc = lp[i];
+      if (lpc && lpc.length > 0) {
+        let lpd = document.createElement('div');
+        lpd.className = 'player-last-played';
+        for (let c of lpc) {
+          let tc = document.createElement('div');
+          tc.className = 'tiny-card';
+          if (isRed(c)) tc.classList.add('red');
+          tc.innerHTML = `<span>${rankStr(c)}</span><span>${suitStr(c)}</span>`;
+          lpd.appendChild(tc);
+        }
+        node.appendChild(lpd);
+      }
     }
 
     ctr.appendChild(node);
@@ -866,9 +896,13 @@ function renderCenterPlayed() {
   let ctr = document.getElementById('center-played');
   ctr.innerHTML = '';
   if (!state) return;
-  let lp = state.player_last_played || {};
-  let cards = lp[mySeat()];
-  if (!cards || cards.length === 0) return;
+  let cards = state.last_played || [];
+  if (cards.length === 0) return;
+  let who = state.last_player;
+  // Show who played these cards above the row
+  if (who != null && who >= 0) {
+    ctr.dataset.who = PLAYER_NAMES[who] || who;
+  }
   for (let c of cards) {
     let el = document.createElement('div');
     el.className = 'played-card';
@@ -881,30 +915,62 @@ function renderCenterPlayed() {
 // ===================================================================
 // Full Render
 // ===================================================================
+// track pass status per player: true = they passed last action
+let playerPassed = {};
+// snapshot of player_last_played at new-round start; only show cards different from this
+let lastPlayedBaseline = {};
+
 function renderAll(s) {
-  if (s) state = s;
+  if (s) {
+    // Detect PASS: if turn moved but prev player's last_played didn't change
+    if (state && s.current_turn !== state.current_turn && s.last_player === state.last_player && s.current_turn !== state.last_player) {
+      playerPassed[state.current_turn] = true;
+    }
+    // Detect new round: last_player reset to -1 → snapshot baseline & clear pass
+    if (s.last_player === -1) {
+      playerPassed = {};
+      // deep-copy current player_last_played as baseline
+      let plp = s.player_last_played || {};
+      lastPlayedBaseline = {};
+      for (let k in plp) lastPlayedBaseline[k] = (plp[k]||[]).slice();
+    }
+    state = s;
+  }
   if (!state) return;
+
+  // Reset HINT cycling on any state change
+  hintOptions = [];
+  hintIndex = 0;
 
   let me = mySeat();
 
   document.getElementById('phase-text').textContent =
     {WAITING:'WAITING',BIDDING:'BIDDING',PLAYING:'ENGAGED!!',END:'FIN'}[state.state] || state.state;
 
-  // Debug: always show state + bidder info in multiplier label
   let mul = Math.max(1, state.multiplier||1);
-  let dbg = 'st=' + state.state + ' me=' + me + ' cb=' + state.current_bidder + ' ct=' + state.current_turn;
   document.getElementById('multiplier-value').textContent = 'X ' + mul;
-  document.getElementById('multiplier-value').title = dbg;
 
   // Action bar — visible during PLAYING and it's my turn
   let bar = document.getElementById('action-bar');
-  bar.style.display = (state.state === 'PLAYING' && state.current_turn === me) ? 'flex' : 'none';
+  let wi = document.getElementById('waiting-indicator');
+  let isMyTurn = state.state === 'PLAYING' && state.current_turn === me;
+  bar.style.display = isMyTurn ? 'flex' : 'none';
+  wi.style.display = (state.state === 'PLAYING' && !isMyTurn) ? 'block' : 'none';
 
-  // Bidding overlay — visible during BIDDING and it's my turn to bid
+  // Bidding overlay — always active during BIDDING
   let bo = document.getElementById('bidding-overlay');
-  if (state.state === 'BIDDING' && String(state.current_bidder) === String(me)) {
+  let bb = document.getElementById('bidding-buttons');
+  let bl = document.getElementById('bidding-label');
+  if (state.state === 'BIDDING') {
     bo.classList.add('active');
-    document.getElementById('bidding-label').textContent = 'CALL THE SHOT (you are seat ' + me + ')';
+    let isMyTurn = String(state.current_bidder) === String(me);
+    bb.style.display = isMyTurn ? 'flex' : 'none';
+    if (isMyTurn) {
+      bl.textContent = 'CALL THE SHOT (YOUR TURN)';
+    } else {
+      let name = (state.current_bidder != null && PLAYER_NAMES[state.current_bidder]) || 'OPPONENT';
+      bl.textContent = 'WAITING FOR ' + name + ' TO BID...';
+    }
   } else {
     bo.classList.remove('active');
   }
@@ -932,7 +998,12 @@ function pass() {
 }
 
 function hint() {
-  post({action:'HINT'});
+  if (hintOptions.length > 0) {
+    hintIndex = (hintIndex + 1) % hintOptions.length;
+    selectHintOption();
+  } else {
+    post({action:'HINT'});
+  }
 }
 
 function play() {
@@ -943,28 +1014,51 @@ function play() {
   renderHand();
 }
 
-// ---- HINT response handler ----
-function handleHint(resp) {
-  if (!state || !state.my_cards) return;
-  let eligible = new Set();
-  for (let opt of resp.options || []) {
-    for (let v of opt) eligible.add(v);
-  }
-  let ctr = document.getElementById('hand-container');
-  let wrappers = ctr.querySelectorAll('.card-wrapper');
-  for (let i = 0; i < wrappers.length; i++) {
-    let val = state.my_cards[i];
-    if (eligible.has(val)) {
-      wrappers[i].classList.add('hint-eligible');
-    } else {
-      wrappers[i].classList.remove('hint-eligible');
+// ---- HINT cycling: fetch once, cycle through options ----
+let hintOptions = [];
+let hintIndex = 0;
+
+function selectHintOption() {
+  let option = hintOptions[hintIndex];
+  selectedSet.clear();
+  let handCopy = state.my_cards.slice();
+  for (let val of option) {
+    let idx = handCopy.indexOf(val);
+    if (idx >= 0) {
+      selectedSet.add(idx);
+      handCopy[idx] = -1;
     }
+  }
+  renderHand();
+}
+
+function handleHint(resp) {
+  hintOptions = resp.options || [];
+  hintIndex = 0;
+  if (hintOptions.length > 0) {
+    selectHintOption();
   }
 }
 
 // ---- BIDDING actions ----
 function bidCall() { post({action:'CALL'}); }
 function bidPass() { post({action:'PASS'}); }
+
+// ---- Error toast ----
+function showError(msg) {
+  let el = document.getElementById('error-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'error-toast';
+    el.className = 'p5-font';
+    el.style.cssText = 'position:fixed;z-index:300;top:200px;left:50%;transform:translateX(-50%);background:var(--blood);color:var(--white);padding:12px 40px;border:4px solid var(--white);font-size:20px;font-style:italic;letter-spacing:2px;opacity:0;transition:opacity 0.2s;pointer-events:none;';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(function() { el.style.opacity = '0'; }, 2000);
+}
 
 // ---- PING heartbeat (every 2s) ----
 setInterval(() => { post({action:'PING'}); }, 2000);
@@ -973,6 +1067,11 @@ return {
   updateState(s) {
     if (typeof s === 'string') {
       try { s = JSON.parse(s); } catch(e) { return; }
+    }
+    // Route error messages — show toast, don't corrupt game state
+    if (s && s.type === 'error') {
+      showError(s.message || s.code || 'ERROR');
+      return;
     }
     // Route HINT response separately
     if (s && s.type === 'hint') {
@@ -1005,7 +1104,10 @@ if (window.chrome && window.chrome.webview) {
   });
 }
 
-window.addEventListener('DOMContentLoaded', () => P5.renderAll(P5.mockState()));
+window.addEventListener('DOMContentLoaded', () => {
+  // Show WAITING overlay until server sends first state
+  document.getElementById('phase-text').textContent = 'CONNECTING...';
+});
 </script>
 </body>
 </html>

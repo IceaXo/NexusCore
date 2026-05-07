@@ -10,6 +10,15 @@ static std::string WideToUtf8(LPCWSTR ws) {
     return result;
 }
 
+static std::wstring Utf8ToWide(const std::string& utf8) {
+    if (utf8.empty()) return {};
+    int needed = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), nullptr, 0);
+    if (needed <= 0) return {};
+    std::wstring result(needed, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), &result[0], needed);
+    return result;
+}
+
 #pragma comment(lib, "ole32.lib")
 
 WebViewHost* WebViewHost::instance_ = nullptr;
@@ -256,7 +265,7 @@ void WebViewHost::FlushStateQueue() {
     if (!webview_) return;
 
     for (const auto& json : states) {
-        std::wstring wjson(json.begin(), json.end());
+        std::wstring wjson = Utf8ToWide(json);
         webview_->PostWebMessageAsJson(wjson.c_str());
     }
 }

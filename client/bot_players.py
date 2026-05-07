@@ -95,8 +95,23 @@ def bot_loop(bot_id):
             elif state == "PLAYING":
                 turn = msg.get("current_turn", -1)
                 if turn == my_seat:
-                    send_message(sock, {"action": "PASS"})
-                    print(f"[Bot{bot_id}] seat={my_seat} PASS (playing)")
+                    time.sleep(1.0)  # let human see the board
+                    # Ask server for valid plays via HINT
+                    send_message(sock, {"action": "HINT"})
+                    hint_msg = None
+                    deadline = time.time() + 3.0
+                    while time.time() < deadline:
+                        hint_msg = recv_message(sock)
+                        if hint_msg and hint_msg.get("type") == "hint":
+                            break
+                    options = hint_msg.get("options", []) if hint_msg else []
+                    if options:
+                        cards = list(options[0])
+                        send_message(sock, {"action": "PLAY", "cards": cards})
+                        print(f"[Bot{bot_id}] seat={my_seat} PLAY {cards}")
+                    else:
+                        send_message(sock, {"action": "PASS"})
+                        print(f"[Bot{bot_id}] seat={my_seat} PASS")
 
             elif state == "END":
                 winner = msg.get("winner", -1)
