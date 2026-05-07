@@ -95,6 +95,18 @@ int Room::GetPlayerIndex(int fd) const {
 }
 
 // ===================================================================
+// SendError —— 向指定玩家发送错误提示 (供 HandleBidding/HandlePlaying 使用)
+// ===================================================================
+static void SendError(const Room::SendCallback& on_send, int fd,
+                      const char* code, const char* msg) {
+    if (!on_send) return;
+    std::ostringstream ss;
+    ss << "{\"type\":\"error\",\"code\":\"" << code
+       << "\",\"message\":\"" << msg << "\"}";
+    on_send(fd, ss.str());
+}
+
+// ===================================================================
 // Room::DealCards
 // ===================================================================
 void Room::DealCards(std::mt19937& rng) {
@@ -185,7 +197,10 @@ void Room::HandleBidding(int fd, const std::string& action) {
     // 检查是否轮到该玩家表态
     if (current_bidder_pos >= static_cast<int>(bidder_queue.size())) return;
     int expected_bidder = bidder_queue[current_bidder_pos];
-    if (idx != expected_bidder) return;
+    if (idx != expected_bidder) {
+        SendError(on_send, fd, "NOT_YOUR_BIDDING", "还没轮到你叫地主");
+        return;
+    }
 
     if (action == "CALL") {
         players[idx].is_landlord = true;
@@ -193,7 +208,8 @@ void Room::HandleBidding(int fd, const std::string& action) {
     } else if (action == "PASS") {
         players[idx].has_passed_bidding = true;
     } else {
-        return; // 未知 action，忽略
+        SendError(on_send, fd, "BAD_BID_ACTION", "叫地主只能 CALL 或 PASS");
+        return;
     }
 
     current_bidder_pos++;
@@ -282,7 +298,10 @@ void Room::HandlePlaying(int fd, const std::string& json) {
 
     int idx = GetPlayerIndex(fd);
     if (idx == -1) return;
-    if (idx != current_turn) return;
+    if (idx != current_turn) {
+        SendError(on_send, fd, "NOT_YOUR_TURN", "还没轮到你出牌");
+        return;
+    }
     if (players[idx].IsHandEmpty()) return;
 
     // 解析 action 字段（简易字符串解析，避免引入 json 库）
@@ -293,7 +312,10 @@ void Room::HandlePlaying(int fd, const std::string& json) {
 
     if (is_pass) {
         // 新一轮自由出牌不允许 PASS
-        if (last_player_idx == -1) return;
+        if (last_player_idx == -1) {
+            SendError(on_send, fd, "CANNOT_PASS", "新一轮出牌不能跳过");
+            return;
+        }
 
         pass_count++;
         if (pass_count >= 4) {
@@ -309,11 +331,20 @@ void Room::HandlePlaying(int fd, const std::string& json) {
         // 解析 cards 数组
         std::vector<uint8_t> play_cards;
         size_t pos = json.find("\"cards\"");
-        if (pos == std::string::npos) return;
+        if (pos == std::string::npos) {
+            SendError(on_send, fd, "MISSING_CARDS", "缺少 cards 字段");
+            return;
+        }
         pos = json.find('[', pos);
-        if (pos == std::string::npos) return;
+        if (pos == std::string::npos) {
+            SendError(on_send, fd, "BAD_JSON", "cards 字段格式错误");
+            return;
+        }
         size_t end = json.find(']', pos);
-        if (end == std::string::npos) return;
+        if (end == std::string::npos) {
+            SendError(on_send, fd, "BAD_JSON", "cards 字段格式错误");
+            return;
+        }
 
         // 解析 [0,5,12] 格式
         std::string cards_str = json.substr(pos + 1, end - pos - 1);
@@ -336,22 +367,32 @@ void Room::HandlePlaying(int fd, const std::string& json) {
             start = num_end;
         }
 
-        if (play_cards.empty()) return;
+        if (play_cards.empty()) {
+            SendError(on_send, fd, "EMPTY_CARDS", "不能出空牌");
+            return;
+        }
 
         // 验证手牌持有
         for (uint8_t c : play_cards) {
             if (std::find(players[idx].hand.begin(), players[idx].hand.end(), c) == players[idx].hand.end()) {
-                return; // 出了自己没有的牌
+                SendError(on_send, fd, "CARD_NOT_IN_HAND", "出了手里没有的牌");
+                return;
             }
         }
 
         // 牌型判定
         CardType type = CardRule::EvaluateType(play_cards);
-        if (type == CardType::INVALID) return;
+        if (type == CardType::INVALID) {
+            SendError(on_send, fd, "INVALID_PATTERN", "牌型不合法");
+            return;
+        }
 
         // 压制判定
         if (last_player_idx != -1) {
-            if (!CardRule::CanBeat(play_cards, last_played_cards)) return;
+            if (!CardRule::CanBeat(play_cards, last_played_cards)) {
+                SendError(on_send, fd, "CANNOT_BEAT", "打不过桌面上的牌");
+                return;
+            }
         }
 
         // 检查炸弹，更新倍数
@@ -374,7 +415,8 @@ void Room::HandlePlaying(int fd, const std::string& json) {
         last_player_idx = idx;
         pass_count = 0;
     } else {
-        return; // 无法解析
+        SendError(on_send, fd, "UNKNOWN_ACTION", "无效的操作类型");
+        return;
     }
 
     // 检查胜负
