@@ -34,9 +34,10 @@ public:
     // ================================================================
 
     // EpollServer 在初始化时调用，把 connections 的地址注入。
-    // RoomManager 通过此指针为 Room 构造 on_send 回调，实现广播能力。
-    // 存储裸指针而非引用，因为 EpollServer 生命周期覆盖整个 main()。
     void SetConnectionMap(std::unordered_map<int, class Connection>* conn_map);
+
+    // EpollServer 在启动 IPC 后调用，注入 IPC 客户端指针用于 AI 通信。
+    void SetIPCClient(class IPCClient* ipc);
 
     // ================================================================
     //  玩家进出
@@ -58,8 +59,21 @@ public:
 
     // 网络层切出完整 JSON 后调用此方法。
     // 内部：fd → 定位 Room → 根据 Room.state 分发到 HandleBidding/HandlePlaying。
-    // 每次处理完后自动调用 room.BroadcastState() 同步牌桌。
+    // 每次处理完后自动触发 AI 检测（若当前回合是 AI 座位，发起 IPC 请求）。
     void OnMessage(int fd, const std::string& json);
+
+    // ================================================================
+    //  AI 托管
+    // ================================================================
+
+    // EpollServer 在收到 IPC AI 决策后调用。
+    void ApplyAIDecision(const std::string& json);
+
+    // 房间内当前回合为 AI 时，发起 AI 决策请求。
+    void RequestAIDecision(int room_idx, int player_idx);
+
+    // OnMessage 收尾检查：若当前回合是 AI 座位，自动触发决策。
+    void CheckAndTriggerAI(int room_idx);
 
     // ================================================================
     //  查询
@@ -84,9 +98,12 @@ private:
     std::unordered_map<int, PlayerLocation> fd_to_location;
 
     // ---- 网络层连接表引用 ----
-    // 非拥有指针。EpollServer 持有真正的 connections map。
-    // RoomManager 通过它构造 on_send 回调，桥接 Room → Connection.send_buffer。
     std::unordered_map<int, class Connection>* connections = nullptr;
+
+    // ---- IPC 客户端引用 ----
+    // 非拥有指针。EpollServer 持有真正的 IPCClient。
+    // RoomManager 通过它向 Python AI 进程发送决策请求。
+    class IPCClient* ipc_client = nullptr;
 
     // ---- 内部辅助 ----
 

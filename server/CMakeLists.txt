@@ -10,5 +10,8 @@ file(GLOB_RECURSE SOURCES
     ipc/*.cpp
 )
 
+# 排除测试文件（它们自带 main()）
+list(FILTER SOURCES EXCLUDE REGEX "test_.*\.cpp$")
+
 add_executable(nexus_server main.cpp ${SOURCES})
 target_include_directories(nexus_server PRIVATE network game ipc)

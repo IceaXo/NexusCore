@@ -44,6 +44,7 @@ bool EpollServer::Start() {
     }
 
     std::cout << "服务器启动成功！正监听房间号: " << port << std::endl;
+    room_manager.SetConnectionMap(&connections);
     return true;
 }
 
@@ -74,7 +75,7 @@ void EpollServer::HandleAccept() {
 
         std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
         connections.emplace(client_fd, client_fd);
-        // TODO: RoomManager::AddPlayer(client_fd);
+        room_manager.AddPlayer(client_fd);
     }
 }
 
@@ -87,6 +88,7 @@ bool EpollServer::HandleRead(int fd) {
 
     if (!it->second.ReadFromSocket()) {
         std::cout << "玩家 " << fd << " 断开连接" << std::endl;
+        room_manager.RemovePlayer(fd);
         epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
         close(fd);
         connections.erase(it);
@@ -98,6 +100,7 @@ bool EpollServer::HandleRead(int fd) {
         // 检测到恶意超大包头，立刻踢掉
         if (it->second.bad_packet) {
             std::cerr << "玩家 " << fd << " 发送超大非法包，踢掉" << std::endl;
+            room_manager.RemovePlayer(fd);
             epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
             close(fd);
             connections.erase(it);
@@ -105,7 +108,7 @@ bool EpollServer::HandleRead(int fd) {
         }
         if (json_msg.empty()) break;
         std::cout << "收到完整JSON: " << json_msg << std::endl;
-        // TODO: RoomManager::OnMessage(fd, json_msg);
+        room_manager.OnMessage(fd, json_msg);
     }
     return true;
 }
@@ -118,6 +121,7 @@ void EpollServer::HandleWrite(int fd) {
     if (it != connections.end()) {
         if (!it->second.WriteToSocket()) {
             std::cout << "玩家 " << fd << " 写出错，断开" << std::endl;
+            room_manager.RemovePlayer(fd);
             epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
             close(fd);
             connections.erase(it);
@@ -142,6 +146,7 @@ void EpollServer::Loop() {
 
     // 步骤二：连接 Python AI 进程，把 ipc_fd 也挂上 epoll
     if (ipc_client.ConnectToAI(8081)) {
+        room_manager.SetIPCClient(&ipc_client);
         epoll_event ipc_ev{};
         ipc_ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
         ipc_ev.data.fd = ipc_client.ipc_fd;
@@ -185,7 +190,7 @@ void EpollServer::Loop() {
                     std::string decision = ipc_client.ExtractAIDecision();
                     if (!decision.empty()) {
                         std::cout << "[EpollServer] 收到 AI 决策: " << decision << std::endl;
-                        // TODO: 转发给 RoomManager
+                        room_manager.ApplyAIDecision(decision);
                     }
                 }
                 if (revents & EPOLLOUT) {

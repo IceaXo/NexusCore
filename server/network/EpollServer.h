@@ -10,6 +10,7 @@
 
 #include "Connection.h"
 #include "../ipc/IPCClient.h"
+#include "../game/RoomManager.h"
 
 class EpollServer {
 private:
@@ -18,6 +19,7 @@ private:
     int epoll_fd;
     std::unordered_map<int, Connection> connections;
     IPCClient ipc_client;
+    RoomManager room_manager;
 
     // ET 模式下循环 accept 直到 EAGAIN，设非阻塞，挂 EPOLLIN|EPOLLOUT|EPOLLET
     void HandleAccept();
