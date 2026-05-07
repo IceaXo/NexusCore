@@ -32,11 +32,7 @@ index.html
 server/agent/stress_async.py
 server/agent/stress_mass.py
 server/agent/stress_rooms.py
-server/agent/stress_test.py
 server/agent/test_client.py
-server/game/test_cardrule.cpp
-server/game/test_comprehensive.cpp
-server/game/test_types.cpp
 
 # Design notes
 cssui.md
