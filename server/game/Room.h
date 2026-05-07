@@ -98,6 +98,9 @@ public:
     //   {"action":"PLAY","cards":[0,5,12]}  或  {"action":"PASS"}
     void HandlePlaying(int fd, const std::string& json);
 
+    // 提示：返回当前手牌所有能压过 last_cards 的合法出牌组合
+    void HandleHint(int fd);
+
     // 玩家断线，该座位移交 AI 托管。
     void SetAITakeover(int player_idx);
 

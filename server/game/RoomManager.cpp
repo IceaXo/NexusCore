@@ -212,9 +212,16 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
             break;
         }
 
-        case RoomState::PLAYING:
-            room.HandlePlaying(fd, json);
+        case RoomState::PLAYING: {
+            // 提示消息单独处理
+            if (json.find("\"HINT\"") != std::string::npos ||
+                json.find("\"action\":\"HINT\"") != std::string::npos) {
+                room.HandleHint(fd);
+            } else {
+                room.HandlePlaying(fd, json);
+            }
             break;
+        }
 
         case RoomState::END:
             break; // 游戏结束，忽略操作

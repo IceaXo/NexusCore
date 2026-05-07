@@ -391,6 +391,34 @@ void Room::HandlePlaying(int fd, const std::string& json) {
 }
 
 // ===================================================================
+// Room::HandleHint
+// ===================================================================
+void Room::HandleHint(int fd) {
+    if (state != RoomState::PLAYING) return;
+    int idx = GetPlayerIndex(fd);
+    if (idx == -1) return;
+    if (idx != current_turn) return;
+    if (players[idx].IsHandEmpty()) return;
+
+    auto options = CardRule::GetHints(players[idx].hand, last_played_cards);
+
+    std::ostringstream ss;
+    ss << "{\"type\":\"hint\",\"options\":[";
+    for (size_t i = 0; i < options.size(); ++i) {
+        if (i > 0) ss << ",";
+        ss << "[";
+        for (size_t j = 0; j < options[i].size(); ++j) {
+            if (j > 0) ss << ",";
+            ss << static_cast<int>(options[i][j]);
+        }
+        ss << "]";
+    }
+    ss << "]}";
+
+    if (on_send) on_send(fd, ss.str());
+}
+
+// ===================================================================
 // Room::AdvanceToNextPlayer
 // ===================================================================
 void Room::AdvanceToNextPlayer() {
