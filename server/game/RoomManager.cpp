@@ -4,6 +4,7 @@
 #include "CardRule.h"
 #include <iostream>
 #include <sstream>
+#include <algorithm>   // std::min_element
 #include <cstring>     // std::memcpy
 #include <arpa/inet.h> // htonl
 
@@ -270,7 +271,18 @@ void RoomManager::CheckAndTriggerAI(int room_idx) {
 // RoomManager::RequestAIDecision —— 向 Python AI 发送决策请求
 // ===================================================================
 void RoomManager::RequestAIDecision(int room_idx, int player_idx) {
-    if (!ipc_client) return;
+    if (!ipc_client) {
+        // 无 AI agent 时的兜底：新一轮出最小单张，否则 PASS
+        Room& room = rooms[room_idx];
+        if (room.last_player_idx == -1 && !room.players[player_idx].hand.empty()) {
+            room.ExecuteAIDecision(player_idx, "PLAY",
+                                  {*std::min_element(room.players[player_idx].hand.begin(),
+                                                     room.players[player_idx].hand.end())});
+        } else {
+            room.ExecuteAIDecision(player_idx, "PASS", {});
+        }
+        return;
+    }
 
     Room& room = rooms[room_idx];
     const PlayerContext& player = room.players[player_idx];
