@@ -187,6 +187,11 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
         return;
     }
 
+    // PING 保活：直接忽略，只刷新心跳时间戳
+    if (json.find("\"PING\"") != std::string::npos) {
+        return;
+    }
+
     auto it = fd_to_location.find(fd);
     if (it == fd_to_location.end()) return;
 

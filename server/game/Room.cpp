@@ -42,6 +42,7 @@ void Room::ResetRoom() {
     last_player_idx = -1;
     pass_count = 0;
     last_played_cards.clear();
+    for (int i = 0; i < 5; ++i) player_last_played[i].clear();
     bottom_cards.clear();
     multiplier = 1;
     bidder_queue.clear();
@@ -368,6 +369,7 @@ void Room::HandlePlaying(int fd, const std::string& json) {
         // 出牌成功
         players[idx].RemoveCards(play_cards);
         players[idx].has_played = true;
+        player_last_played[idx] = play_cards;
         last_played_cards = play_cards;
         last_player_idx = idx;
         pass_count = 0;
@@ -511,6 +513,7 @@ void Room::ExecuteAIDecision(int player_idx, const std::string& action,
 
         players[player_idx].RemoveCards(cards);
         players[player_idx].has_played = true;
+        player_last_played[player_idx] = cards;
         last_played_cards = cards;
         last_player_idx = player_idx;
         pass_count = 0;
@@ -558,6 +561,9 @@ std::string Room::SerializeState(int player_idx) const {
     }
     ss << "]";
 
+    // my_seat (客户端据此判断是否轮到自己、该显示哪个UI)
+    ss << ",\"my_seat\":" << player_idx;
+
     // player_card_counts (每人剩余张数)
     ss << ",\"player_card_counts\":[";
     for (int i = 0; i < 5; ++i) {
@@ -583,6 +589,22 @@ std::string Room::SerializeState(int player_idx) const {
         }
     }
     ss << "]";
+
+    // player_last_played (每人最近一次出的牌)
+    ss << ",\"player_last_played\":{";
+    bool first_plp = true;
+    for (int i = 0; i < 5; ++i) {
+        if (player_last_played[i].empty()) continue;
+        if (!first_plp) ss << ",";
+        ss << "\"" << i << "\":[";
+        for (size_t j = 0; j < player_last_played[i].size(); ++j) {
+            if (j > 0) ss << ",";
+            ss << static_cast<int>(player_last_played[i][j]);
+        }
+        ss << "]";
+        first_plp = false;
+    }
+    ss << "}";
 
     // last_played
     ss << ",\"last_played\":[";

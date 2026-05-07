@@ -66,6 +66,7 @@ public:
     int pass_count = 0;             // 连续 pass 次数，>=4 时进入新一轮
 
     std::vector<uint8_t> last_played_cards; // 桌面上要压制的牌（新一轮时为 empty）
+    std::vector<uint8_t> player_last_played[5]; // 每个玩家最近一次出的牌（客户端头像旁展示）
     std::vector<uint8_t> bottom_cards;      // 底牌 4 张
 
     int64_t multiplier = 1;         // 倍数（底分 × 倍数 = 最终分）
