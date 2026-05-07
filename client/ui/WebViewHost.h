@@ -1,0 +1,76 @@
+#pragma once
+#include <windows.h>
+#include <string>
+#include <functional>
+#include <mutex>
+#include <vector>
+#include <wrl/client.h>
+#include <wrl/implements.h>
+#include <WebView2.h>
+
+// ================================================================
+// Lightweight WebView2 COM callback wrapper (replaces WIL's Callback)
+// Wraps a lambda/std::function as a COM callback object via WRL.
+// ================================================================
+template <typename TInterface, typename TSignature>
+struct WvCallback;
+
+template <typename TInterface, typename R, typename... Args>
+struct WvCallback<TInterface, R(Args...)>
+    : public Microsoft::WRL::RuntimeClass<
+        Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+        TInterface>
+{
+    using Fn = std::function<R(Args...)>;
+
+    WvCallback(Fn fn) : fn_(std::move(fn)) {}
+
+    R STDMETHODCALLTYPE Invoke(Args... args) override {
+        return fn_(args...);
+    }
+
+    template <typename TLambda>
+    static Microsoft::WRL::ComPtr<TInterface> Make(TLambda&& lambda) {
+        return Microsoft::WRL::Make<WvCallback>(Fn(std::forward<TLambda>(lambda)));
+    }
+
+private:
+    Fn fn_;
+};
+
+// ================================================================
+
+class WebViewHost {
+public:
+    using JSCallback = std::function<void(const std::string& json)>;
+
+    WebViewHost();
+    ~WebViewHost();
+
+    bool Init(HINSTANCE hInstance, const std::wstring& htmlPath, int nCmdShow = SW_SHOW);
+    void Run();
+    void PushState(const std::string& json);
+    void SetOnJSMessage(JSCallback cb);
+
+private:
+    static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+
+    bool InitWebView2();
+    void OnWebViewReady();
+    std::wstring GetHTMLFullPath(const std::wstring& filename);
+    void FlushStateQueue();
+
+    HWND hwnd_ = nullptr;
+    Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller_;
+    Microsoft::WRL::ComPtr<ICoreWebView2> webview_;
+    EventRegistrationToken msg_token_;
+
+    JSCallback js_callback_;
+    std::wstring html_path_;
+
+    std::mutex state_mutex_;
+    std::vector<std::string> state_queue_;
+
+    static WebViewHost* instance_;
+    static const UINT WM_FLUSH_STATE = WM_USER + 100;
+};

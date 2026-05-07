@@ -3,11 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Anton&display=swap');
-
 /* ===================================================================
    P5 Design Tokens — 1:1 from p5.md
-   Font: Anton, italic throughout
+   Font: Impact / system sans-serif, bold italic throughout
+   No external resources — pure system fonts
    =================================================================== */
 :root {
   --blood:  #dc2626;
@@ -15,7 +14,7 @@
   --white:  #FFFFFF;
 }
 .p5-font {
-  font-family: 'Anton', sans-serif;
+  font-family: Impact, 'Arial Black', sans-serif;
   letter-spacing: 1px;
 }
 
@@ -53,7 +52,8 @@ body {
   background: rgba(0,0,0,0.95);
   transform: rotate(-12deg);
   z-index: 1; pointer-events: none;
-  box-shadow: 0 0 150px rgba(0,0,0,1);
+  /* Strip edge hard shadow — solid offset, no blur per spec */
+  box-shadow: 0 0 0 40px rgba(0,0,0,0.7), 0 0 0 80px rgba(0,0,0,0.3);
   animation: stripPulse 3s ease-in-out infinite;
 }
 @keyframes stripPulse {
@@ -74,7 +74,7 @@ body {
 .bg-watermark {
   position: fixed;
   top: 25%; right: 5%;
-  font-family: 'Anton', sans-serif;
+  font-family: Impact, 'Arial Black', sans-serif;
   font-size: 220px; letter-spacing: 1px;
   color: rgba(255,255,255,0.05);
   transform: rotate(-12deg);
@@ -197,7 +197,7 @@ body {
   padding: 4px 24px;
   transform: rotate(-2deg);
   border-left: 8px solid var(--blood);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  box-shadow: 4px 4px 0px 0px rgba(0,0,0,1);
 }
 .player-name span {
   font-size: 12px; color: var(--white);
@@ -217,7 +217,7 @@ body {
   border: 2.5px solid var(--black);
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  font-family: 'Anton',sans-serif;
+  font-family: Impact, 'Arial Black', sans-serif;
   font-size: 11px; font-style: italic; line-height: 1;
   color: var(--black);
   box-shadow: 3px 3px 0px 0px rgba(0,0,0,0.5);
@@ -241,7 +241,7 @@ body {
   border: 3px solid var(--black);
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  font-family: 'Anton',sans-serif;
+  font-family: Impact, 'Arial Black', sans-serif;
   color: var(--black);
   box-shadow: 6px 6px 0px 0px rgba(0,0,0,0.5);
   margin-left: -10px;
@@ -544,8 +544,8 @@ function isRed(c) { let s = cSuit(c); return s === 1 || s === 2; }
 
 function post(msg) {
   try {
-    if (window.webkit && window.webkit.messageHandlers) {
-      window.webkit.messageHandlers.game.postMessage(JSON.stringify(msg));
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage(JSON.stringify(msg));
     }
   } catch(e) {}
 }
@@ -791,6 +791,13 @@ return {
 };
 
 })();
+
+// Listen for state pushed from C++ WebView2 host via PostWebMessageAsJson
+if (window.chrome && window.chrome.webview) {
+  window.chrome.webview.addEventListener('message', function(e) {
+    P5.updateState(e.data);
+  });
+}
 
 window.addEventListener('DOMContentLoaded', () => P5.renderAll(P5.mockState()));
 </script>

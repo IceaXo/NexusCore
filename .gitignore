@@ -2,6 +2,12 @@
 build/
 nexus_server
 nexus_client
+
+# NuGet SDK packages (large, installed per-machine)
+client/packages/
+
+# Test artifacts
+client/mock_server.log
 __pycache__/
 .vscode/
 .claude/
@@ -9,6 +15,8 @@ __pycache__/
 技术文档.md
 需求文档.md
 规则文档.md
+设计文档.md
+
 
 # Test binaries & output
 server/game/test_cardrule
