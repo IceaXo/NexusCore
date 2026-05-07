@@ -5,6 +5,7 @@ nexus_client
 __pycache__/
 .vscode/
 .claude/
+.env
 技术文档.md
 需求文档.md
 规则文档.md

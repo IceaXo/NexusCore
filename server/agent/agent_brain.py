@@ -219,8 +219,25 @@ def send_message(sock, msg):
 # ===================================================================
 # 主循环
 # ===================================================================
+def load_api_key():
+    """从 .env 文件或环境变量加载 API key（.env 优先）"""
+    # 1. 尝试同目录下的 .env 文件
+    env_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    if os.path.exists(env_file):
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or '=' not in line:
+                    continue
+                k, v = line.split('=', 1)
+                if k.strip() == 'DEEPSEEK_API_KEY':
+                    return v.strip().strip('"').strip("'")
+    # 2. 回退到环境变量
+    return os.environ.get('DEEPSEEK_API_KEY', '')
+
+
 def main():
-    api_key = os.environ.get('DEEPSEEK_API_KEY', '')
+    api_key = load_api_key()
     if not api_key:
         print("[agent] 警告: DEEPSEEK_API_KEY 未设置，将始终使用 fallback (PASS)", file=sys.stderr)
 
