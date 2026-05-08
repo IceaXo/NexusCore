@@ -665,7 +665,7 @@ body {
 // ===================================================================
 const P5 = (() => {
 
-const SUIT_MAP  = { S:'♠', H:'♥', D:'♦', C:'♣' };
+const SUIT_MAP  = { D:'♦', C:'♣', H:'♥', S:'♠' };
 const RANK_NAMES = ['3','4','5','6','7','8','9','10','J','Q','K','A','2','SJ','BJ'];
 const PLAYER_NAMES = ['SKULL','PANTHER','FOX','QUEEN','JOKER'];
 const PLAYER_POS = [
@@ -687,12 +687,12 @@ function rankStr(c) {
   if (c === 56) return 'BJ';
   return RANK_NAMES[r];
 }
-function suitStr(c) { return SUIT_MAP[['S','H','D','C'][cSuit(c)]]; }
+function suitStr(c) { return SUIT_MAP[['D','C','H','S'][cSuit(c)]]; }
 function isRed(c) {
   if (c === 53) return false;
   if (c === 56) return true;
   let s = cSuit(c);
-  return s === 1 || s === 2;
+  return s === 0 || s === 2;
 }
 function isJoker(c) { return c === 53 || c === 56; }
 
