@@ -17,7 +17,7 @@ __pycache__/
 需求文档.md
 规则文档.md
 设计文档.md
-
+PLAN.md
 
 # Test binaries & output
 server/game/test_cardrule
