@@ -142,12 +142,10 @@ void Room::BuildBidderQueue() {
     bidder_queue.clear();
     // 遍历方块 3→4→5→...→A→2，即 rank 0..12
     for (int rank = 0; rank <= 12; ++rank) {
-        // 方块牌编码 = rank*4 + 0
-        uint8_t diamond_card = static_cast<uint8_t>(rank * 4);
         for (int i = 0; i < 5; ++i) {
             bool found = false;
             for (uint8_t c : players[i].hand) {
-                if (c == diamond_card) {
+                if (CardRule::IsNormalCard(c) && CardRule::GetSuit(c) == 0 && CardRule::GetRank(c) == rank) {
                     // 该玩家尚未在队列中 → 加入
                     if (std::find(bidder_queue.begin(), bidder_queue.end(), i) == bidder_queue.end()) {
                         bidder_queue.push_back(i);
@@ -188,7 +186,7 @@ void Room::StartGame() {
 // ===================================================================
 // Room::HandleBidding —— 按 bidder_queue 动态顺位叫地主
 // ===================================================================
-void Room::HandleBidding(int fd, const std::string& action) {
+void Room::HandleBidding(int fd, const std::string& json) {
     if (state != RoomState::BIDDING) return;
 
     int idx = GetPlayerIndex(fd);
@@ -202,10 +200,15 @@ void Room::HandleBidding(int fd, const std::string& action) {
         return;
     }
 
-    if (action == "CALL") {
+    bool is_call = (json.find("\"CALL\"") != std::string::npos ||
+                    json.find("\"action\":\"CALL\"") != std::string::npos);
+    bool is_pass = (json.find("\"PASS\"") != std::string::npos ||
+                    json.find("\"action\":\"PASS\"") != std::string::npos);
+
+    if (is_call) {
         players[idx].is_landlord = true;
         landlord_count++;
-    } else if (action == "PASS") {
+    } else if (is_pass) {
         players[idx].has_passed_bidding = true;
     } else {
         SendError(on_send, fd, "BAD_BID_ACTION", "叫地主只能 CALL 或 PASS");

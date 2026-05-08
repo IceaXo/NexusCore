@@ -93,7 +93,7 @@ public:
 
     // 叫地主阶段。fd 发来 "CALL" 或 "PASS"。
     // 按 bidder_queue 顺序依次表态，动态顺位直到凑齐 2 个地主或全员 PASS。
-    void HandleBidding(int fd, const std::string& action);
+    void HandleBidding(int fd, const std::string& json);
 
     // 出牌阶段。解析 fd 发来的 JSON：
     //   {"action":"PLAY","cards":[0,5,12]}  或  {"action":"PASS"}

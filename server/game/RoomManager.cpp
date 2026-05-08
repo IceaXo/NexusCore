@@ -148,7 +148,7 @@ void RoomManager::RemovePlayer(int fd) {
                 // 从 fd_to_location 已删，HandleBidding 用 -1 fd 调 GetPlayerIndex 会返回 -1
                 // 直接模拟 PASS
                 room.players[player_idx].fd = -1;
-                room.HandleBidding(fd, "PASS");
+                room.HandleBidding(fd, "{\"action\":\"PASS\"}");
             } else {
                 room.players[player_idx].fd = -1;
             }
@@ -203,18 +203,7 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
             break; // 房间不满员，忽略消息
 
         case RoomState::BIDDING: {
-            // 提取 action: "CALL" 或 "PASS"
-            std::string action;
-            if (json.find("\"CALL\"") != std::string::npos ||
-                json.find("\"action\":\"CALL\"") != std::string::npos) {
-                action = "CALL";
-            } else if (json.find("\"PASS\"") != std::string::npos ||
-                       json.find("\"action\":\"PASS\"") != std::string::npos) {
-                action = "PASS";
-            } else {
-                return;
-            }
-            room.HandleBidding(fd, action);
+            room.HandleBidding(fd, json);
             break;
         }
 
