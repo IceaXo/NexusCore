@@ -62,6 +62,36 @@ void Room::ResetRoom() {
 }
 
 // ===================================================================
+// Room::ReturnToWaiting —— END → WAITING，保留 fd/名字/头像/总分
+// ===================================================================
+void Room::ReturnToWaiting() {
+    for (int i = 0; i < 5; ++i) {
+        players[i].hand.clear();
+        players[i].is_landlord = false;
+        players[i].has_passed_bidding = false;
+        players[i].has_played = false;
+        players[i].is_ready = false;
+        // 保留 fd, name, avatar, reconnect_token
+    }
+    current_turn = 0;
+    last_player_idx = -1;
+    pass_count = 0;
+    last_played_cards.clear();
+    for (int i = 0; i < 5; ++i) player_last_played[i].clear();
+    bottom_cards.clear();
+    multiplier = 1;
+    bidder_queue.clear();
+    current_bidder_pos = 0;
+    landlord_count = 0;
+    bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+    bottom_pick_count = 0;
+    bottom_pick_landlord = -1;
+    for (int i = 0; i < 5; ++i) round_scores[i] = 0;
+    state = RoomState::WAITING;
+    // 注意：cumulative_scores 不清零，current_round/total_rounds 保留
+}
+
+// ===================================================================
 // Room::FullReset —— 完全重置，清空名字头像总分
 // ===================================================================
 void Room::FullReset() {
@@ -111,11 +141,27 @@ void Room::ReconnectPlayer(int player_idx, int new_fd) {
 }
 
 // ===================================================================
+// Room::IsSeatOccupied —— 真人（fd!=-1）或 AI（fd==-1 但有名字）
+// ===================================================================
+bool Room::IsSeatOccupied(int seat) const {
+    return players[seat].fd != -1 || players[seat].is_ai;
+}
+
+// ===================================================================
 // Room::AllReady
 // ===================================================================
 bool Room::AllReady() const {
     for (int i = 0; i < 5; ++i) {
-        if (players[i].fd == -1 || !players[i].is_ready) return false;
+        if (players[i].fd == -1 && !players[i].name.empty()) {
+            // AI 托管玩家：按 is_ready 判断
+            if (!players[i].is_ready) return false;
+        } else if (players[i].fd == -1) {
+            // 空位：不能开局
+            return false;
+        } else {
+            // 真人玩家：必须 ready
+            if (!players[i].is_ready) return false;
+        }
     }
     return true;
 }
@@ -623,12 +669,33 @@ void Room::HandleAIBidding(int player_idx) {
     if (current_bidder_pos >= static_cast<int>(bidder_queue.size())) return;
     if (bidder_queue[current_bidder_pos] != player_idx) return;
 
-    players[player_idx].has_passed_bidding = true;
-    current_bidder_pos++;
+    bool is_last_bidder = (current_bidder_pos + 1 >= static_cast<int>(bidder_queue.size()));
 
-    if (landlord_count == 0 && current_bidder_pos >= static_cast<int>(bidder_queue.size())) {
-        StartGame();
-        return;
+    // 概率叫地主：没人叫时 70%，已有 1 人时 30%
+    // 如果没地主且是最后一个 bidder，必须叫（避免无限重开）
+    bool must_call = (landlord_count == 0 && is_last_bidder);
+    int threshold = (landlord_count == 0) ? 70 : 30;
+    std::mt19937 rng(std::random_device{}());
+
+    if (must_call || (rng() % 100 < threshold)) {
+        players[player_idx].is_landlord = true;
+        landlord_count++;
+        current_bidder_pos++;
+
+        if (landlord_count >= 2) {
+            state = RoomState::BOTTOM_PICK;
+            bottom_pick_count = 0;
+            bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+            bottom_pick_landlord = GetFirstLandlord();
+        }
+    } else {
+        players[player_idx].has_passed_bidding = true;
+        current_bidder_pos++;
+
+        if (landlord_count == 0 && current_bidder_pos >= static_cast<int>(bidder_queue.size())) {
+            StartGame();
+            return;
+        }
     }
 
     BroadcastState();
@@ -1014,7 +1081,7 @@ std::string Room::SerializeState(int player_idx) const {
 std::string Room::SerializeRoomInfo(int room_id) const {
     int count = 0;
     for (int i = 0; i < 5; ++i) {
-        if (players[i].fd != -1) count++;
+        if (IsSeatOccupied(i)) count++;
     }
 
     std::ostringstream ss;

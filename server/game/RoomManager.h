@@ -97,4 +97,6 @@ private:
     void HandleReady(int fd);
     void HandleSetRounds(int fd, const std::string& json);
     void HandleContinue(int fd);
+    void HandleAddBot(int room_idx);
+    void HandleRemoveBot(int room_idx, int seat);
 };

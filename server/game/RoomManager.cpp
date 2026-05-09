@@ -74,7 +74,7 @@ int RoomManager::FindWaitingRoom() {
     for (int i = 0; i < MAX_ROOMS; ++i) {
         if (rooms[i].state == RoomState::WAITING) {
             for (int j = 0; j < 5; ++j) {
-                if (rooms[i].players[j].fd == -1) return i;
+                if (!rooms[i].IsSeatOccupied(j)) return i;
             }
         }
     }
@@ -92,7 +92,7 @@ int RoomManager::FindWaitingRoom() {
 // ===================================================================
 int RoomManager::FindEmptySeat(const Room& room) {
     for (int i = 0; i < 5; ++i) {
-        if (room.players[i].fd == -1) return i;
+        if (!room.IsSeatOccupied(i)) return i;
     }
     return -1;
 }
@@ -154,6 +154,15 @@ bool RoomManager::JoinRoom(int fd, int room_id) {
 
     Room& room = rooms[room_idx];
 
+    // 如果所有真人已离开但房间还在游戏状态（人机残局），重置房间
+    bool all_disconnected = true;
+    for (int i = 0; i < 5; ++i) {
+        if (room.players[i].fd != -1) { all_disconnected = false; break; }
+    }
+    if (all_disconnected && room.state != RoomState::WAITING && room.state != RoomState::END) {
+        room.FullReset();
+    }
+
     // 只允许加入 WAITING 或 END 状态的房间
     if (room.state != RoomState::WAITING && room.state != RoomState::END) return false;
     if (room.state == RoomState::END) {
@@ -180,7 +189,7 @@ bool RoomManager::JoinRoom(int fd, int room_id) {
     }
 
     // 第一个进入的玩家成为房主
-    if (room.owner_seat == -1 || room.players[room.owner_seat].fd == -1) {
+    if (room.owner_seat == -1 || !room.IsSeatOccupied(room.owner_seat)) {
         room.owner_seat = seat;
     }
 
@@ -201,7 +210,7 @@ bool RoomManager::JoinRoom(int fd, int room_id) {
     // 检查是否满 5 人且全部 ready → 开局
     int player_count = 0;
     for (int i = 0; i < 5; ++i) {
-        if (room.players[i].fd != -1) player_count++;
+        if (room.IsSeatOccupied(i)) player_count++;
     }
     if (player_count == 5 && room.AllReady()) {
         room.StartGame();
@@ -221,13 +230,12 @@ void RoomManager::LeaveRoom(int fd) {
     int player_idx = it->second.player_idx;
     Room& room = rooms[room_idx];
 
-    // 保存名字和头像
+    // 保存名字和头像（回大厅用）
     std::string name = room.players[player_idx].name;
     int avatar = room.players[player_idx].avatar;
 
-    // 清空座位
-    room.players[player_idx].fd = -1;
-    room.players[player_idx].is_ready = false;
+    // 清空座位（完全重置）
+    room.players[player_idx] = PlayerContext{};
 
     fd_to_location.erase(it);
 
@@ -236,12 +244,12 @@ void RoomManager::LeaveRoom(int fd) {
         room.TransferOwnership();
     }
 
-    // 如果房间空了，重置
-    bool all_empty = true;
+    // 如果没有真人玩家了，清空房间（包括人机）
+    bool has_real_player = false;
     for (int i = 0; i < 5; ++i) {
-        if (room.players[i].fd != -1) { all_empty = false; break; }
+        if (room.players[i].fd != -1) { has_real_player = true; break; }
     }
-    if (all_empty) {
+    if (!has_real_player) {
         room.FullReset();
     }
 
@@ -405,7 +413,7 @@ void RoomManager::HandleReady(int fd) {
     // 检查是否满 5 人且全部 ready → 开局
     int player_count = 0;
     for (int i = 0; i < 5; ++i) {
-        if (room.players[i].fd != -1) player_count++;
+        if (room.IsSeatOccupied(i)) player_count++;
     }
     if (player_count == 5 && room.AllReady()) {
         room.StartGame();
@@ -448,6 +456,76 @@ void RoomManager::HandleSetRounds(int fd, const std::string& json) {
 }
 
 // ===================================================================
+// RoomManager::HandleAddBot —— WAITING 状态空位填 AI
+// ===================================================================
+void RoomManager::HandleAddBot(int room_idx) {
+    Room& room = rooms[room_idx];
+    if (room.state != RoomState::WAITING) return;
+
+    // 找第一个空位
+    int seat = -1;
+    for (int i = 0; i < 5; ++i) {
+        if (!room.IsSeatOccupied(i)) {
+            seat = i;
+            break;
+        }
+    }
+    if (seat == -1) return;
+
+    // 统计已有 AI 数量，确定编号
+    int bot_count = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (room.players[i].is_ai) bot_count++;
+    }
+
+    room.players[seat].fd = -1;
+    room.players[seat].name = "AI_" + std::to_string(bot_count + 1);
+    room.players[seat].avatar = 0;
+    room.players[seat].is_ready = true;
+    room.players[seat].is_ai = true;
+
+    room.BroadcastState();
+    BroadcastRoomList();
+
+    if (room.AllReady()) {
+        room.StartGame();
+    }
+}
+
+// ===================================================================
+// RoomManager::HandleRemoveBot —— WAITING 状态移除 AI
+// ===================================================================
+void RoomManager::HandleRemoveBot(int room_idx, int seat) {
+    Room& room = rooms[room_idx];
+    if (room.state != RoomState::WAITING) return;
+    if (seat < 0 || seat >= 5) return;
+    if (!room.IsSeatOccupied(seat)) return;
+
+    // 如果是真人，踢回大厅
+    int fd = room.players[seat].fd;
+    if (fd != -1) {
+        std::string name = room.players[seat].name;
+        int avatar = room.players[seat].avatar;
+        room.players[seat] = PlayerContext{};
+        fd_to_location.erase(fd);
+        lobby_players[fd] = {name, avatar};
+        // 通知该玩家已离开房间
+        SendToPlayer(connections, fd,
+            "{\"type\":\"kicked\",\"message\":\"你已被移出房间\"}");
+    } else {
+        room.players[seat] = PlayerContext{};
+    }
+
+    // 房主转移
+    if (room.owner_seat == seat) {
+        room.TransferOwnership();
+    }
+
+    room.BroadcastState();
+    BroadcastRoomList();
+}
+
+// ===================================================================
 // RoomManager::HandleContinue —— END 结算后推进
 // ===================================================================
 void RoomManager::HandleContinue(int fd) {
@@ -482,15 +560,15 @@ void RoomManager::HandleContinue(int fd) {
         room.cumulative_scores[i] += delta;
     }
 
+    // 统一回到 WAITING，所有人重新 READY 后开下一局
+    room.ReturnToWaiting();
     if (room.current_round >= room.total_rounds) {
-        // 最后一局结束 → 回到 WAITING 准备下一场
-        room.ResetRoom();
-        room.BroadcastState();
-        BroadcastRoomList();
-    } else {
-        // 还有下一局 → 重新发牌
-        room.StartGame();
+        // 末局 → 新比赛，清空累计分
+        for (int i = 0; i < 5; ++i) room.cumulative_scores[i] = 0;
+        room.current_round = 0;
     }
+    room.BroadcastState();
+    BroadcastRoomList();
 }
 
 // ===================================================================
@@ -573,15 +651,35 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
 
     switch (room.state) {
         case RoomState::WAITING: {
-            // READY
+            // READY / CONTINUE（两者等价，toggle 准备状态）
             if (json.find("\"READY\"") != std::string::npos ||
-                json.find("\"action\":\"READY\"") != std::string::npos) {
+                json.find("\"action\":\"READY\"") != std::string::npos ||
+                json.find("\"CONTINUE\"") != std::string::npos ||
+                json.find("\"action\":\"CONTINUE\"") != std::string::npos) {
                 HandleReady(fd);
             }
             // SET_ROUNDS
             if (json.find("\"SET_ROUNDS\"") != std::string::npos ||
                 json.find("\"action\":\"SET_ROUNDS\"") != std::string::npos) {
                 HandleSetRounds(fd, json);
+            }
+            // ADD_BOT — 空位填 AI
+            if (json.find("\"ADD_BOT\"") != std::string::npos ||
+                json.find("\"action\":\"ADD_BOT\"") != std::string::npos) {
+                HandleAddBot(it->second.room_idx);
+            }
+            // REMOVE_BOT — 移除 AI
+            if (json.find("\"REMOVE_BOT\"") != std::string::npos ||
+                json.find("\"action\":\"REMOVE_BOT\"") != std::string::npos) {
+                int seat = -1;
+                size_t spos = json.find("\"seat\"");
+                if (spos != std::string::npos) {
+                    spos = json.find(':', spos);
+                    if (spos != std::string::npos) {
+                        seat = std::stoi(json.substr(spos + 1));
+                    }
+                }
+                HandleRemoveBot(it->second.room_idx, seat);
             }
             break;
         }
@@ -658,6 +756,7 @@ void RoomManager::CheckAndTriggerAI(int room_idx) {
         int turn = room.current_turn;
         if (!room.players[turn].IsHandEmpty() && room.players[turn].fd == -1) {
             RequestAIDecision(room_idx, turn);
+            CheckAndTriggerAI(room_idx);
         }
         return;
     }

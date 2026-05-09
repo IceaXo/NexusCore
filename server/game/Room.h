@@ -31,6 +31,7 @@ struct PlayerContext {
     std::string name;                   // 玩家昵称（max 12 字符）
     int avatar = 0;                     // 头像编号 0-4
     bool is_ready = false;              // 准备状态（WAITING阶段）
+    bool is_ai = false;                 // 是否为人机（ADD_BOT 添加或断线 AI 接管）
 
     bool IsHandEmpty() const { return hand.empty(); }
 
@@ -109,8 +110,11 @@ public:
     // AI 底牌选择阶段自动选择
     void HandleAIPickBottom(int player_idx);
 
-    // 本局结束后重置房间
+    // 本局结束后重置房间（保留名字/头像/总分，fd=-1）
     void ResetRoom();
+
+    // 从 END 回到 WAITING（保留 fd/名字/头像/总分，只清 ready 和游戏状态）
+    void ReturnToWaiting();
 
     // 完全重置（清空名字/头像），用于回到 WAITING 重开
     void FullReset();
@@ -120,6 +124,9 @@ public:
 
     // 房主转移：房主离开时按座位顺序找下一位
     void TransferOwnership();
+
+    // 检查座位是否被占用（真人或 AI）
+    bool IsSeatOccupied(int seat) const;
 
     // 检查是否所有人 ready
     bool AllReady() const;
