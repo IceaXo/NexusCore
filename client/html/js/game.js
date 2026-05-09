@@ -562,6 +562,32 @@ P5.handleHint = function(resp) {
   }
 };
 
+// ---- Speed toggle (1x → 2x → 3x → 1x) ----
+P5._speedLevel = 1;
+P5.toggleSpeed = function() {
+  P5._speedLevel = (P5._speedLevel % 3) + 1;  // 1→2→3→1
+  var btn = document.getElementById('btn-speed');
+  if (btn) {
+    btn.textContent = P5._speedLevel + 'x';
+    btn.classList.remove('speed-2x', 'speed-3x');
+    if (P5._speedLevel >= 2) btn.classList.add('speed-2x');
+    if (P5._speedLevel >= 3) btn.classList.add('speed-3x');
+  }
+  P5.post({action:'SET_SPEED', speed: P5._speedLevel});
+};
+
+// ---- Autoplay toggle ----
+P5._autoplay = false;
+P5.toggleAutoplay = function() {
+  P5._autoplay = !P5._autoplay;
+  var btn = document.getElementById('btn-autoplay');
+  if (btn) {
+    if (P5._autoplay) btn.classList.add('active');
+    else btn.classList.remove('active');
+  }
+  P5.post({action:'SET_AUTOPLAY'});
+};
+
 // ---- Bidding actions ----
 P5.bidCall = function() { P5.post({action:'CALL'}); };
 P5.bidPass = function() {

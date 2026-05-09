@@ -5,8 +5,14 @@
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <arpa/inet.h>
+
+static int64_t NowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // ===================================================================
 // RoomManager::RoomManager
@@ -679,6 +685,47 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
         return;
     }
 
+    // SET_SPEED — 切换 AI 思考速度（任何游戏状态）
+    if (json.find("\"SET_SPEED\"") != std::string::npos ||
+        json.find("\"action\":\"SET_SPEED\"") != std::string::npos) {
+        size_t spos = json.find("\"speed\"");
+        if (spos != std::string::npos) {
+            spos = json.find(':', spos);
+            if (spos != std::string::npos) {
+                int speed = std::stoi(json.substr(spos + 1));
+                room.ai_delay_ms = (speed >= 3) ? 333 : (speed >= 2) ? 1000 : 2000;
+            }
+        }
+        return;
+    }
+
+    // SET_AUTOPLAY — 托管开关（任何游戏状态）
+    if (json.find("\"SET_AUTOPLAY\"") != std::string::npos ||
+        json.find("\"action\":\"SET_AUTOPLAY\"") != std::string::npos) {
+        int idx = it->second.player_idx;
+        room.players[idx].is_autoplay = !room.players[idx].is_autoplay;
+        // 如果开启托管且当前轮到该玩家，立即调度 AI
+        if (room.players[idx].is_autoplay) {
+            room.ai_scheduled_at = 0;
+            CheckAndTriggerAI(it->second.room_idx);
+        }
+        return;
+    }
+
+    // 玩家手动操作时，如果托管中则自动关闭托管
+    {
+        int idx = it->second.player_idx;
+        bool is_game_action = (json.find("\"PLAY\"") != std::string::npos ||
+                               json.find("\"PASS\"") != std::string::npos ||
+                               json.find("\"CALL\"") != std::string::npos ||
+                               json.find("\"PICK_BOTTOM\"") != std::string::npos ||
+                               json.find("\"HINT\"") != std::string::npos);
+        if (is_game_action && room.players[idx].is_autoplay) {
+            room.players[idx].is_autoplay = false;
+            room.ai_scheduled_at = 0;
+        }
+    }
+
     switch (room.state) {
         case RoomState::WAITING: {
             // READY / CONTINUE（两者等价，toggle 准备状态）
@@ -763,9 +810,10 @@ void RoomManager::CheckAndTriggerAI(int room_idx) {
     if (room.state == RoomState::BIDDING) {
         if (room.current_bidder_pos < static_cast<int>(room.bidder_queue.size())) {
             int bidder = room.bidder_queue[room.current_bidder_pos];
-            if (room.players[bidder].fd == -1) {
-                room.HandleAIBidding(bidder);
-                CheckAndTriggerAI(room_idx);
+            if (room.players[bidder].fd == -1 || room.players[bidder].is_autoplay) {
+                if (room.ai_scheduled_at == 0) {
+                    room.ai_scheduled_at = NowMs() + room.ai_delay_ms;
+                }
             }
         }
         return;
@@ -773,22 +821,62 @@ void RoomManager::CheckAndTriggerAI(int room_idx) {
 
     if (room.state == RoomState::BOTTOM_PICK) {
         if (room.bottom_pick_landlord >= 0 &&
-            room.players[room.bottom_pick_landlord].fd == -1 &&
+            (room.players[room.bottom_pick_landlord].fd == -1 ||
+             room.players[room.bottom_pick_landlord].is_autoplay) &&
             room.bottom_pick_count < 2) {
-            room.HandleAIPickBottom(room.bottom_pick_landlord);
-            // 选完牌后进入 PLAYING，递归检查
-            CheckAndTriggerAI(room_idx);
+            if (room.ai_scheduled_at == 0) {
+                room.ai_scheduled_at = NowMs() + room.ai_delay_ms;
+            }
         }
         return;
     }
 
     if (room.state == RoomState::PLAYING) {
         int turn = room.current_turn;
-        if (!room.players[turn].IsHandEmpty() && room.players[turn].fd == -1) {
-            RequestAIDecision(room_idx, turn);
-            CheckAndTriggerAI(room_idx);
+        if (!room.players[turn].IsHandEmpty() && (room.players[turn].fd == -1 || room.players[turn].is_autoplay)) {
+            if (room.ai_scheduled_at == 0) {
+                room.ai_scheduled_at = NowMs() + room.ai_delay_ms;
+            }
         }
         return;
+    }
+}
+
+// ===================================================================
+// RoomManager::ProcessScheduledAI —— 主循环调用，到时间则执行 AI
+// ===================================================================
+void RoomManager::ProcessScheduledAI() {
+    int64_t now = NowMs();
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        Room& room = rooms[i];
+        if (room.ai_scheduled_at == 0 || now < room.ai_scheduled_at) continue;
+
+        room.ai_scheduled_at = 0;
+
+        // 执行当前 AI 行动（立即模式）
+        if (room.state == RoomState::BIDDING) {
+            if (room.current_bidder_pos < static_cast<int>(room.bidder_queue.size())) {
+                int bidder = room.bidder_queue[room.current_bidder_pos];
+                if (room.players[bidder].fd == -1 || room.players[bidder].is_autoplay) {
+                    room.HandleAIBidding(bidder);
+                    CheckAndTriggerAI(i);
+                }
+            }
+        } else if (room.state == RoomState::BOTTOM_PICK) {
+            if (room.bottom_pick_landlord >= 0 &&
+                (room.players[room.bottom_pick_landlord].fd == -1 ||
+                 room.players[room.bottom_pick_landlord].is_autoplay) &&
+                room.bottom_pick_count < 2) {
+                room.HandleAIPickBottom(room.bottom_pick_landlord);
+                CheckAndTriggerAI(i);
+            }
+        } else if (room.state == RoomState::PLAYING) {
+            int turn = room.current_turn;
+            if (!room.players[turn].IsHandEmpty() && (room.players[turn].fd == -1 || room.players[turn].is_autoplay)) {
+                RequestAIDecision(i, turn);
+                CheckAndTriggerAI(i);
+            }
+        }
     }
 }
 
@@ -803,7 +891,12 @@ void RoomManager::RequestAIDecision(int room_idx, int player_idx) {
                                   {*std::min_element(room.players[player_idx].hand.begin(),
                                                      room.players[player_idx].hand.end())});
         } else {
-            room.ExecuteAIDecision(player_idx, "PASS", {});
+            auto options = CardRule::GetHints(room.players[player_idx].hand, room.last_played_cards);
+            if (!options.empty()) {
+                room.ExecuteAIDecision(player_idx, "PLAY", options[0]);
+            } else {
+                room.ExecuteAIDecision(player_idx, "PASS", {});
+            }
         }
         return;
     }

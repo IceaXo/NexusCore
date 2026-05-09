@@ -57,6 +57,7 @@ public:
     void ApplyAIDecision(const std::string& json);
     void RequestAIDecision(int room_idx, int player_idx);
     void CheckAndTriggerAI(int room_idx);
+    void ProcessScheduledAI();
     bool HandleReconnect(int fd, const std::string& token);
 
     // ================================================================

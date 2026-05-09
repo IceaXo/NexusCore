@@ -149,6 +149,9 @@ void EpollServer::Loop() {
     epoll_event events[MAX_EVENTS];
 
     while (true) {
+        // 检查是否有到期的 AI 调度
+        room_manager.ProcessScheduledAI();
+
         int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, 1000);
         if (num_ready == -1) {
             std::cerr << "epoll等待出错" << std::endl;

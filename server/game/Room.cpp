@@ -60,6 +60,7 @@ void Room::ResetRoom() {
     bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
     bottom_pick_count = 0;
     bottom_pick_landlord = -1;
+    ai_scheduled_at = 0;
     for (int i = 0; i < 5; ++i) round_scores[i] = 0;
     // AI 玩家自动就绪
     for (int i = 0; i < 5; ++i) {
@@ -77,6 +78,7 @@ void Room::ReturnToWaiting() {
         players[i].is_landlord = false;
         players[i].has_passed_bidding = false;
         players[i].has_played = false;
+        players[i].is_autoplay = false;
         // AI 或断线托管玩家自动就绪，真人重新等待准备
         if (players[i].is_ai || (players[i].fd == -1 && !players[i].name.empty())) {
             players[i].is_ready = true;
@@ -98,6 +100,7 @@ void Room::ReturnToWaiting() {
     bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
     bottom_pick_count = 0;
     bottom_pick_landlord = -1;
+    ai_scheduled_at = 0;
     for (int i = 0; i < 5; ++i) round_scores[i] = 0;
     state = RoomState::WAITING;
 }
@@ -122,6 +125,7 @@ void Room::FullReset() {
     bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
     bottom_pick_count = 0;
     bottom_pick_landlord = -1;
+    ai_scheduled_at = 0;
     for (int i = 0; i < 5; ++i) cumulative_scores[i] = 0;
     for (int i = 0; i < 5; ++i) round_scores[i] = 0;
     owner_seat = -1;
@@ -334,6 +338,7 @@ void Room::StartGame() {
     bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
     bottom_pick_count = 0;
     bottom_pick_landlord = -1;
+    ai_scheduled_at = 0;
 
     state = RoomState::BIDDING;
     BroadcastState();
@@ -691,22 +696,20 @@ void Room::HandleAIBidding(int player_idx) {
     if (must_call || (rng() % 100 < threshold)) {
         players[player_idx].is_landlord = true;
         landlord_count++;
-        current_bidder_pos++;
-
-        if (landlord_count >= 2) {
-            state = RoomState::BOTTOM_PICK;
-            bottom_pick_count = 0;
-            bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
-            bottom_pick_landlord = GetFirstLandlord();
-        }
     } else {
         players[player_idx].has_passed_bidding = true;
-        current_bidder_pos++;
+    }
 
-        if (landlord_count == 0 && current_bidder_pos >= static_cast<int>(bidder_queue.size())) {
-            StartGame();
-            return;
-        }
+    current_bidder_pos++;
+
+    if (landlord_count >= 2) {
+        state = RoomState::BOTTOM_PICK;
+        bottom_pick_count = 0;
+        bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+        bottom_pick_landlord = GetFirstLandlord();
+    } else if (current_bidder_pos >= static_cast<int>(bidder_queue.size())) {
+        StartGame();
+        return;
     }
 
     BroadcastState();

@@ -2,6 +2,7 @@
 #include <vector>
 #include <cstdint>
 #include <string>
+#include <chrono>
 #include <random>    // std::mt19937
 #include <functional> // std::function
 
@@ -32,6 +33,7 @@ struct PlayerContext {
     int avatar = 0;                     // 头像编号 0-4
     bool is_ready = false;              // 准备状态（WAITING阶段）
     bool is_ai = false;                 // 是否为人机（ADD_BOT 添加或断线 AI 接管）
+    bool is_autoplay = false;           // 是否开启了托管（真人挂机，AI 代打）
 
     bool IsHandEmpty() const { return hand.empty(); }
 
@@ -74,6 +76,10 @@ public:
     int bottom_pick_indices[2] = {-1, -1};
     int bottom_pick_count = 0;          // 已选数量 (0-2)
     int bottom_pick_landlord = -1;      // 正在选牌的地主A的座位号
+
+    // ---- AI 延迟调度 ----
+    int64_t ai_scheduled_at = 0;        // 计划的 AI 执行时间戳 (ms)，0 = 无待执行 AI
+    int ai_delay_ms = 2000;             // AI 思考延迟 (ms)，2x 加速时为 1000
 
     // ---- 广播回调 ----
     using SendCallback = std::function<void(int fd, const std::string& json)>;
