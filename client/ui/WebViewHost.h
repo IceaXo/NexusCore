@@ -48,7 +48,7 @@ public:
     WebViewHost();
     ~WebViewHost();
 
-    bool Init(HINSTANCE hInstance, const std::wstring& htmlPath, int nCmdShow = SW_SHOW);
+    bool Init(HINSTANCE hInstance, const std::wstring& startUrl, int nCmdShow = SW_SHOW);
     void Run();
     void PushState(const std::string& json);
     void SetOnJSMessage(JSCallback cb);
@@ -59,7 +59,6 @@ private:
 
     bool InitWebView2();
     void OnWebViewReady();
-    std::wstring GetHTMLFullPath(const std::wstring& filename);
     void FlushStateQueue();
 
     HWND hwnd_ = nullptr;
@@ -69,7 +68,7 @@ private:
 
     JSCallback js_callback_;
     ServerChangeCallback server_change_cb_;
-    std::wstring html_path_;
+    std::wstring start_url_;
 
     std::mutex state_mutex_;
     std::vector<std::string> state_queue_;

@@ -94,8 +94,12 @@ P5.enterRoomList = function() {
 P5.connectServer = function() {
   var hostEl = document.getElementById('input-host');
   var portEl = document.getElementById('input-port');
-  var host = (hostEl && hostEl.value.trim()) ? hostEl.value.trim() : '127.0.0.1';
-  var port = parseInt(portEl && portEl.value.trim() ? portEl.value.trim() : '8080');
+  // Infer game server from the HTTP host that served this page.
+  // If loaded via file://, fall back to hardcoded address.
+  var defaultHost = window.location.hostname || '8.134.18.58';
+  var defaultPort = '7777';
+  var host = (hostEl && hostEl.value.trim()) ? hostEl.value.trim() : defaultHost;
+  var port = parseInt(portEl && portEl.value.trim() ? portEl.value.trim() : defaultPort);
   P5.post({action:'SET_SERVER', host: host, port: port});
 
   var modal = document.getElementById('server-modal');

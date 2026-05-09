@@ -56,10 +56,23 @@ P5.renderAll = function(s) {
 
     // Update state in engine's closure
     P5._setState(s);
+
+    // BOTTOM_PICK → PLAYING animation intercept
+    if (s.state === 'PLAYING' && prevState && prevState.state === 'BOTTOM_PICK' && !P5._isAnimatingBottomPick) {
+      P5._isAnimatingBottomPick = true;
+      P5.playBottomPickAnimation(s);
+      return;
+    }
   }
 
   let st = P5.getState();
   if (!st) return;
+
+  // Don't render while bottom pick animation runs — queue latest state
+  if (P5._isAnimatingBottomPick) {
+    P5._pendingState = st;
+    return;
+  }
 
   // Reset HINT cycling
   P5._hintOptions = [];

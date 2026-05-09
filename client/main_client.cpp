@@ -3,16 +3,38 @@
 #include <iostream>
 #include <string>
 
-int main() {
-    // --- Parse command line (optional: --server <ip> --port <port>) ---
-    std::string serverIP = "127.0.0.1";
-    uint16_t serverPort = 8080;
+int main(int argc, char* argv[]) {
+    // --- Default start URL (HTTP hosting by server, local file as fallback) ---
+    std::string serverIP = "8.134.18.58";
+    uint16_t serverPort = 7777;
+    std::wstring startUrl = L"http://8.134.18.58:7778/p5_ui.html";
+
+    // --- Parse command line ---
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--url" && i + 1 < argc) {
+            std::string url = argv[++i];
+            startUrl = std::wstring(url.begin(), url.end());
+        } else if (arg == "--file" && i + 1 < argc) {
+            // Local file fallback: --file p5_ui.html
+            std::string path = argv[++i];
+            std::string fileUrl = "file:///";
+            fileUrl += path;
+            for (auto& ch : fileUrl)
+                if (ch == '\\') ch = '/';
+            startUrl = std::wstring(fileUrl.begin(), fileUrl.end());
+        } else if (arg == "--server" && i + 1 < argc) {
+            serverIP = argv[++i];
+        } else if (arg == "--port" && i + 1 < argc) {
+            serverPort = static_cast<uint16_t>(std::stoi(argv[++i]));
+        }
+    }
 
     // --- Create WebView2 host (Win32 window + WebView2 engine) ---
     WebViewHost host;
     HINSTANCE hInstance = GetModuleHandle(nullptr);
 
-    if (!host.Init(hInstance, L"p5_ui.html")) {
+    if (!host.Init(hInstance, startUrl)) {
         std::cerr << "[main] WebViewHost initialization failed" << std::endl;
         return 1;
     }

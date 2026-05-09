@@ -68,6 +68,7 @@ P5.isJoker = isJoker;
 P5.mySeat = mySeat;
 P5.post = post;
 P5.PLAYER_NAMES = PLAYER_NAMES;
+P5.PLAYER_POS = PLAYER_POS;
 P5.selectedSet = selectedSet;
 
 // ===================================================================

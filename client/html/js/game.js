@@ -11,7 +11,10 @@ P5._hintIndex = 0;
 // ---- BOTTOM_PICK state ----
 var bottomPickSelected = [];
 var maxBottomPicks = 2;
-var bottomPickFlipping = false;
+P5._isAnimatingBottomPick = false;
+P5._pendingState = null;
+var bottomPickIndicesSaved = null;
+var bottomPickLandlordSaved = -1;
 
 // ===================================================================
 // renderGame — master game render
@@ -62,12 +65,16 @@ P5.renderGame = function(st) {
   // BOTTOM_PICK area
   // ================================================================
   var bpArea = document.getElementById('bottom-pick-area');
-  if (st.state === 'BOTTOM_PICK') {
+  if (P5._isAnimatingBottomPick) {
+    /* animation owns bpArea */
+  } else if (st.state === 'BOTTOM_PICK') {
     if (bpArea) bpArea.style.display = 'flex';
+    if (st.bottom_pick_indices) bottomPickIndicesSaved = st.bottom_pick_indices.slice();
+    if (typeof st.bottom_pick_landlord === 'number') bottomPickLandlordSaved = st.bottom_pick_landlord;
     P5.renderBottomPickCards(st);
     var confirmBtn = document.getElementById('btn-confirm-pick');
     if (confirmBtn) confirmBtn.style.display = st.is_picking ? 'block' : 'none';
-  } else if (!bottomPickFlipping) {
+  } else {
     if (bpArea) bpArea.style.display = 'none';
     bottomPickSelected = [];
   }
@@ -76,7 +83,9 @@ P5.renderGame = function(st) {
   // Top mini bottom cards bar (during PLAYING/END)
   // ================================================================
   var miniBar = document.getElementById('bottom-mini-bar');
-  if (st.state === 'PLAYING' || st.state === 'END') {
+  if (P5._isAnimatingBottomPick) {
+    if (miniBar) miniBar.style.display = 'none';
+  } else if (st.state === 'PLAYING' || st.state === 'END') {
     if (miniBar) miniBar.style.display = 'flex';
     P5.renderMiniBottomCards(st);
   } else {
@@ -103,6 +112,7 @@ P5.renderGame = function(st) {
 // BOTTOM_PICK: render 4 card backs
 // ===================================================================
 P5.renderBottomPickCards = function(st) {
+  if (P5._isAnimatingBottomPick) return;
   var ctr = document.getElementById('bottom-pick-cards');
   if (!ctr) return;
   ctr.innerHTML = '';
@@ -140,17 +150,173 @@ P5.renderBottomPickCards = function(st) {
 };
 
 P5.confirmBottomPick = function() {
+  if (P5._isAnimatingBottomPick) return;
   if (bottomPickSelected.length !== 2) return;
-  // Animate flip on selected cards
-  var cards = document.querySelectorAll('.pick-card-back.selected');
-  for (var k = 0; k < cards.length; k++) {
-    cards[k].classList.add('flip-card');
-  }
-  // Freeze area for 600ms so flip animation can play before server hides it
-  bottomPickFlipping = true;
-  setTimeout(function() { bottomPickFlipping = false; }, 600);
+  bottomPickIndicesSaved = bottomPickSelected.slice();
   P5.post({action:'PICK_BOTTOM', indices: bottomPickSelected.slice()});
   bottomPickSelected = [];
+};
+
+// ===================================================================
+// BOTTOM_PICK → PLAYING reveal + fly animation
+// ===================================================================
+function getPlayerCenter(seat) {
+  var me = P5.mySeat();
+  var posIdx = (seat - me - 1 + 10) % 5;
+  var pos = P5.PLAYER_POS[posIdx];
+  if (!pos) return {x: 100, y: 100};
+  return {x: pos.x + 32, y: pos.y + 32};
+}
+
+function buildFlipCard(cardVal) {
+  var isR = P5.isRed(cardVal);
+  var isJ = P5.isJoker(cardVal);
+
+  var wrapper = document.createElement('div');
+  wrapper.className = 'flip-card-wrapper';
+
+  var container = document.createElement('div');
+  container.className = 'flip-container';
+
+  var flipper = document.createElement('div');
+  flipper.className = 'flipper';
+
+  var front = document.createElement('div');
+  front.className = 'flip-front';
+
+  var back = document.createElement('div');
+  back.className = 'flip-back';
+  if (isR) back.classList.add('red');
+
+  if (isJ) {
+    back.innerHTML = '<span class="flip-rank">' + P5.rankStr(cardVal) + '</span><span class="flip-suit">★</span>';
+  } else {
+    back.innerHTML = '<span class="flip-rank">' + P5.rankStr(cardVal) + '</span><span class="flip-suit">' + P5.suitStr(cardVal) + '</span>';
+  }
+
+  flipper.appendChild(front);
+  flipper.appendChild(back);
+  container.appendChild(flipper);
+  wrapper.appendChild(container);
+  return wrapper;
+}
+
+P5.playBottomPickAnimation = async function(st) {
+  var bpArea = document.getElementById('bottom-pick-area');
+  var bpCards = document.getElementById('bottom-pick-cards');
+  var confirmBtn = document.getElementById('btn-confirm-pick');
+  var title = bpArea ? bpArea.querySelector('.bottom-pick-title') : null;
+
+  var landlords = st.landlords || [];
+  var bottomCards = st.bottom_cards || [];
+  var names = st.player_names || [];
+
+  if (!bpArea || landlords.length < 2 || bottomCards.length < 4) {
+    P5._isAnimatingBottomPick = false;
+    P5.renderGame(st);
+    return;
+  }
+
+  // First picker = the landlord who actually picked (saved from BOTTOM_PICK state)
+  var firstPicker = (bottomPickLandlordSaved >= 0) ? bottomPickLandlordSaved : landlords[0];
+  var secondPicker = -1;
+  for (var li = 0; li < landlords.length; li++) {
+    if (landlords[li] !== firstPicker) { secondPicker = landlords[li]; break; }
+  }
+  if (secondPicker === -1) secondPicker = landlords[1];
+
+  // Build position mapping: selected indices first, then non-selected
+  var selected = bottomPickIndicesSaved || [0, 1];
+  var notSelected = [];
+  for (var p = 0; p < 4; p++) {
+    if (selected[0] !== p && selected[1] !== p) notSelected.push(p);
+  }
+  var posOrder = selected.concat(notSelected);   // e.g. [0,3,1,2]
+  var baseOffsets = [-186, -62, 62, 186];         // pixel offsets for each original position
+
+  // Stage: clear existing pick cards, keep area visible, hide confirm
+  if (bpCards) bpCards.innerHTML = '';
+  if (confirmBtn) confirmBtn.style.display = 'none';
+  if (title) title.textContent = 'REVEALING...';
+  bpArea.style.display = 'flex';
+
+  // Create 4 flip wrappers at original display positions
+  var wrappers = [];
+  var flippers = [];
+  var pickedWrappers = [];
+  var remainingWrappers = [];
+
+  for (var i = 0; i < 4; i++) {
+    var origPos = posOrder[i];                    // which screen position this card belongs at
+    var wrapper = buildFlipCard(bottomCards[i]);
+    wrapper.style.left = 'calc(50% + ' + baseOffsets[origPos] + 'px - 60px)';
+    wrapper.style.top = 'calc(50% - 92px)';
+    wrapper.setAttribute('data-orig-pos', origPos);
+    bpArea.appendChild(wrapper);
+    wrappers.push(wrapper);
+    flippers.push(wrapper.querySelector('.flipper'));
+
+    if (i < 2) {
+      wrapper.setAttribute('data-picked', '1');
+      pickedWrappers.push(wrapper);
+    } else {
+      wrapper.setAttribute('data-picked', '0');
+      remainingWrappers.push(wrapper);
+    }
+  }
+
+  await new Promise(function(r) { setTimeout(r, 400); });
+
+  // --- Step 2: flip first picker's selected cards ---
+  for (var j = 0; j < pickedWrappers.length; j++) {
+    pickedWrappers[j].querySelector('.flipper').classList.add('flipped');
+  }
+  await new Promise(function(r) { setTimeout(r, 800); });
+
+  // --- Step 3: fly selected cards to first picker ---
+  var tA = getPlayerCenter(firstPicker);
+  var nameA = names[firstPicker] || P5.PLAYER_NAMES[firstPicker] || ('P' + firstPicker);
+  if (title) title.textContent = nameA + ' PICKS';
+  for (var k = 0; k < pickedWrappers.length; k++) {
+    pickedWrappers[k].style.left = tA.x + 'px';
+    pickedWrappers[k].style.top = tA.y + 'px';
+    pickedWrappers[k].classList.add('fly-out');
+  }
+  await new Promise(function(r) { setTimeout(r, 900); });
+
+  // Remove flown cards
+  for (var m = 0; m < pickedWrappers.length; m++) {
+    pickedWrappers[m].remove();
+  }
+
+  // --- Step 4: flip second picker's cards ---
+  for (var n = 0; n < remainingWrappers.length; n++) {
+    remainingWrappers[n].querySelector('.flipper').classList.add('flipped');
+  }
+  await new Promise(function(r) { setTimeout(r, 800); });
+
+  // --- Step 5: fly remaining cards to second picker ---
+  var tB = getPlayerCenter(secondPicker);
+  var nameB = names[secondPicker] || P5.PLAYER_NAMES[secondPicker] || ('P' + secondPicker);
+  if (title) title.textContent = nameB + ' PICKS';
+  for (var q = 0; q < remainingWrappers.length; q++) {
+    remainingWrappers[q].style.left = tB.x + 'px';
+    remainingWrappers[q].style.top = tB.y + 'px';
+    remainingWrappers[q].classList.add('fly-out');
+  }
+  await new Promise(function(r) { setTimeout(r, 900); });
+
+  for (var r = 0; r < remainingWrappers.length; r++) {
+    remainingWrappers[r].remove();
+  }
+
+  // --- Step 6: cleanup & resume normal render ---
+  P5._isAnimatingBottomPick = false;
+  bpArea.style.display = 'none';
+
+  var renderSt = P5._pendingState || st;
+  P5._pendingState = null;
+  P5.renderGame(renderSt);
 };
 
 // ===================================================================
@@ -167,8 +333,12 @@ P5.renderMiniBottomCards = function(st) {
   var bottomCards = st.bottom_cards || [];
 
   if (landlords.length >= 2 && bottomCards.length >= 4) {
-    var llA = landlords[0];
-    var llB = landlords[1];
+    var llA = (bottomPickLandlordSaved >= 0) ? bottomPickLandlordSaved : landlords[0];
+    var llB = -1;
+    for (var li = 0; li < landlords.length; li++) {
+      if (landlords[li] !== llA) { llB = landlords[li]; break; }
+    }
+    if (llB === -1) llB = landlords[1];
     if (labelA) labelA.textContent = names[llA] || P5.PLAYER_NAMES[llA] || ('P' + llA);
     if (labelB) labelB.textContent = names[llB] || P5.PLAYER_NAMES[llB] || ('P' + llB);
 

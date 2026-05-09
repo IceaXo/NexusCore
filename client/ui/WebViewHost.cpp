@@ -27,8 +27,8 @@ const UINT WebViewHost::WM_FLUSH_STATE;
 WebViewHost::WebViewHost() {}
 WebViewHost::~WebViewHost() { instance_ = nullptr; }
 
-bool WebViewHost::Init(HINSTANCE hInstance, const std::wstring& htmlPath, int nCmdShow) {
-    html_path_ = htmlPath;
+bool WebViewHost::Init(HINSTANCE hInstance, const std::wstring& startUrl, int nCmdShow) {
+    start_url_ = startUrl;
     instance_ = this;
 
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
@@ -93,39 +93,6 @@ void WebViewHost::SetOnServerChange(ServerChangeCallback cb) {
 // ============================================================
 // Private
 // ============================================================
-
-std::wstring WebViewHost::GetHTMLFullPath(const std::wstring& filename) {
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    wchar_t* lastSlash = wcsrchr(exePath, L'\\');
-    if (lastSlash) *lastSlash = L'\0';
-
-    // Exe is at <root>/client/build/<config>/nexus_client.exe
-    // HTML is at <root>/client/html/<filename>
-    // So from exe dir: ..\..\html\<filename>
-    std::wstring candidates[] = {
-        std::wstring(exePath) + L"\\" + filename,
-        std::wstring(exePath) + L"\\html\\" + filename,
-        std::wstring(exePath) + L"\\..\\html\\" + filename,
-        std::wstring(exePath) + L"\\..\\..\\html\\" + filename,
-    };
-
-    std::wstring best;
-    for (const auto& p : candidates) {
-        DWORD attr = GetFileAttributesW(p.c_str());
-        if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
-            best = p;
-            break;
-        }
-    }
-    if (best.empty()) best = candidates[0];
-
-    std::wstring url = L"file:///";
-    url += best;
-    for (auto& ch : url)
-        if (ch == L'\\') ch = L'/';
-    return url;
-}
 
 LRESULT CALLBACK WebViewHost::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     auto* host = instance_;
@@ -231,7 +198,7 @@ void WebViewHost::OnWebViewReady() {
                 if (msg.find("\"SET_SERVER\"") != std::string::npos ||
                     msg.find("\"action\":\"SET_SERVER\"") != std::string::npos) {
                     // Extract host
-                    std::string host = "127.0.0.1";
+                    std::string host = "8.134.18.58";
                     size_t pos = msg.find("\"host\"");
                     if (pos != std::string::npos) {
                         pos = msg.find('"', pos + 6);
@@ -242,7 +209,7 @@ void WebViewHost::OnWebViewReady() {
                         }
                     }
                     // Extract port
-                    uint16_t port = 8080;
+                    uint16_t port = 7777;
                     pos = msg.find("\"port\"");
                     if (pos != std::string::npos) {
                         pos = msg.find(':', pos);
@@ -279,9 +246,8 @@ void WebViewHost::OnWebViewReady() {
     GetClientRect(hwnd_, &bounds);
     controller_->put_Bounds(bounds);
 
-    std::wstring url = GetHTMLFullPath(html_path_);
-    std::wcout << L"[WebViewHost] Loading: " << url << std::endl;
-    webview_->Navigate(url.c_str());
+    std::wcout << L"[WebViewHost] Loading: " << start_url_ << std::endl;
+    webview_->Navigate(start_url_.c_str());
 
     // Flush any server messages that arrived before WebView2 was ready
     FlushStateQueue();

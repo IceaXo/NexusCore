@@ -173,13 +173,78 @@
 }
 
 /* ===================================================================
-   Card flip animation (BOTTOM_PICK reveal)
+   3D Flip Card — Bottom Pick reveal animation
    =================================================================== */
-@keyframes flipCard {
-  0%   { transform: skewX(-4deg) rotateY(0deg); }
-  50%  { transform: skewX(-4deg) rotateY(90deg); }
-  100% { transform: skewX(-4deg) rotateY(0deg); }
+.flip-card-wrapper {
+  position: fixed;
+  width: 120px; height: 185px;
+  z-index: 250;
+  perspective: 800px;
+  transition: left 0.7s cubic-bezier(0.4, 0, 0.2, 1),
+              top 0.7s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.5s ease,
+              transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.flip-card {
-  animation: flipCard 0.5s ease-in-out;
+
+.flip-container {
+  width: 100%; height: 100%;
+}
+
+.flipper {
+  position: relative;
+  width: 100%; height: 100%;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.flipper.flipped {
+  transform: rotateY(180deg);
+}
+
+.flip-front, .flip-back {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+}
+
+.flip-front {
+  background: var(--blood);
+  border: 5px solid var(--white);
+}
+
+.flip-front::after {
+  content: '';
+  position: absolute; inset: 8px;
+  border: 3px solid rgba(255,255,255,0.3);
+}
+
+.flip-back {
+  background: var(--white);
+  border: 5px solid var(--black);
+  transform: rotateY(180deg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  font-family: Impact, 'Arial Black', sans-serif;
+  font-style: italic;
+}
+
+.flip-back.red {
+  color: var(--blood);
+}
+
+.flip-rank {
+  font-size: 48px; font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.flip-suit {
+  font-size: 36px;
+  margin-top: -2px;
+}
+
+/* Fly target state */
+.flip-card-wrapper.fly-out {
+  transform: scale(0.25);
+  opacity: 0;
 }
