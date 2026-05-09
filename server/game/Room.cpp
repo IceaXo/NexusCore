@@ -1,10 +1,10 @@
 #include "Room.h"
 #include "CardRule.h"
-#include <algorithm>   // std::shuffle, std::find, std::sort
-#include <random>     // std::mt19937, std::random_device
-#include <sstream>    // std::ostringstream
-#include <cstring>    // std::memcpy
-#include <arpa/inet.h> // htonl
+#include <algorithm>
+#include <random>
+#include <sstream>
+#include <cstring>
+#include <arpa/inet.h>
 
 // ===================================================================
 // PlayerContext::RemoveCards
@@ -32,11 +32,17 @@ std::string Room::GenerateToken() {
 }
 
 // ===================================================================
-// Room::ResetRoom
+// Room::ResetRoom —— 保留名字/头像，清除 ready，回 WAITING
 // ===================================================================
 void Room::ResetRoom() {
     for (int i = 0; i < 5; ++i) {
-        players[i] = PlayerContext{};  // 清零所有字段，fd 变回 -1
+        // 保留 name 和 avatar
+        std::string saved_name = players[i].name;
+        int saved_avatar = players[i].avatar;
+        players[i] = PlayerContext{};
+        players[i].name = saved_name;
+        players[i].avatar = saved_avatar;
+        players[i].fd = -1;
     }
     current_turn = 0;
     last_player_idx = -1;
@@ -48,6 +54,38 @@ void Room::ResetRoom() {
     bidder_queue.clear();
     current_bidder_pos = 0;
     landlord_count = 0;
+    bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+    bottom_pick_count = 0;
+    bottom_pick_landlord = -1;
+    for (int i = 0; i < 5; ++i) round_scores[i] = 0;
+    state = RoomState::WAITING;
+}
+
+// ===================================================================
+// Room::FullReset —— 完全重置，清空名字头像总分
+// ===================================================================
+void Room::FullReset() {
+    for (int i = 0; i < 5; ++i) {
+        players[i] = PlayerContext{};
+    }
+    current_turn = 0;
+    last_player_idx = -1;
+    pass_count = 0;
+    last_played_cards.clear();
+    for (int i = 0; i < 5; ++i) player_last_played[i].clear();
+    bottom_cards.clear();
+    multiplier = 1;
+    bidder_queue.clear();
+    current_bidder_pos = 0;
+    landlord_count = 0;
+    bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+    bottom_pick_count = 0;
+    bottom_pick_landlord = -1;
+    for (int i = 0; i < 5; ++i) cumulative_scores[i] = 0;
+    for (int i = 0; i < 5; ++i) round_scores[i] = 0;
+    owner_seat = -1;
+    total_rounds = 5;
+    current_round = 0;
     state = RoomState::WAITING;
 }
 
@@ -73,12 +111,72 @@ void Room::ReconnectPlayer(int player_idx, int new_fd) {
 }
 
 // ===================================================================
+// Room::AllReady
+// ===================================================================
+bool Room::AllReady() const {
+    for (int i = 0; i < 5; ++i) {
+        if (players[i].fd == -1 || !players[i].is_ready) return false;
+    }
+    return true;
+}
+
+// ===================================================================
+// Room::TransferOwnership
+// ===================================================================
+void Room::TransferOwnership() {
+    for (int i = 0; i < 5; ++i) {
+        int seat = (owner_seat + 1 + i) % 5;
+        if (players[seat].fd != -1) {
+            owner_seat = seat;
+            return;
+        }
+    }
+    owner_seat = -1; // 没人了
+}
+
+// ===================================================================
+// Room::GetFirstLandlord / GetSecondLandlord
+// ===================================================================
+int Room::GetFirstLandlord() const {
+    std::vector<int> landlord_indices;
+    for (int i = 0; i < 5; ++i) {
+        if (players[i].is_landlord) landlord_indices.push_back(i);
+    }
+    if (landlord_indices.size() < 2) return -1;
+
+    auto find_min_diamond = [](const std::vector<uint8_t>& hand) -> int {
+        int min_rank = 999;
+        for (uint8_t c : hand) {
+            if (CardRule::IsNormalCard(c) && CardRule::GetSuit(c) == 0) {
+                int r = CardRule::GetRank(c);
+                if (r < min_rank) min_rank = r;
+            }
+        }
+        return min_rank;
+    };
+
+    return find_min_diamond(players[landlord_indices[0]].hand) <
+           find_min_diamond(players[landlord_indices[1]].hand)
+           ? landlord_indices[0] : landlord_indices[1];
+}
+
+int Room::GetSecondLandlord() const {
+    std::vector<int> landlord_indices;
+    for (int i = 0; i < 5; ++i) {
+        if (players[i].is_landlord) landlord_indices.push_back(i);
+    }
+    if (landlord_indices.size() < 2) return -1;
+    int first = GetFirstLandlord();
+    return (landlord_indices[0] == first) ? landlord_indices[1] : landlord_indices[0];
+}
+
+// ===================================================================
 // Room::CheckSpring
 // ===================================================================
 bool Room::CheckSpring() const {
     for (int i = 0; i < 5; ++i) {
         if (!players[i].is_landlord && players[i].has_played) {
-            return false;  // 有农民出过牌，不是春天
+            return false;
         }
     }
     return true;
@@ -95,7 +193,7 @@ int Room::GetPlayerIndex(int fd) const {
 }
 
 // ===================================================================
-// SendError —— 向指定玩家发送错误提示 (供 HandleBidding/HandlePlaying 使用)
+// SendError
 // ===================================================================
 static void SendError(const Room::SendCallback& on_send, int fd,
                       const char* code, const char* msg) {
@@ -110,16 +208,14 @@ static void SendError(const Room::SendCallback& on_send, int fd,
 // Room::DealCards
 // ===================================================================
 void Room::DealCards(std::mt19937& rng) {
-    // 一副 54 张: 0..51 (普通) + 53 (小王) + 56 (大王)
     std::vector<uint8_t> deck;
     deck.reserve(54);
     for (int i = 0; i <= 51; ++i) deck.push_back(static_cast<uint8_t>(i));
-    deck.push_back(53);  // 小王
-    deck.push_back(56);  // 大王
+    deck.push_back(53);
+    deck.push_back(56);
 
     std::shuffle(deck.begin(), deck.end(), rng);
 
-    // 每人 10 张
     for (int i = 0; i < 5; ++i) {
         players[i].hand.clear();
         for (int j = 0; j < 10; ++j) {
@@ -128,7 +224,6 @@ void Room::DealCards(std::mt19937& rng) {
         CardRule::SortHand(players[i].hand);
     }
 
-    // 底牌 4 张
     bottom_cards.clear();
     for (int i = 50; i < 54; ++i) {
         bottom_cards.push_back(deck[i]);
@@ -136,17 +231,15 @@ void Room::DealCards(std::mt19937& rng) {
 }
 
 // ===================================================================
-// Room::BuildBidderQueue —— 按方块点数从小到大找持有者，去重形成队列
+// Room::BuildBidderQueue
 // ===================================================================
 void Room::BuildBidderQueue() {
     bidder_queue.clear();
-    // 遍历方块 3→4→5→...→A→2，即 rank 0..12
     for (int rank = 0; rank <= 12; ++rank) {
         for (int i = 0; i < 5; ++i) {
             bool found = false;
             for (uint8_t c : players[i].hand) {
                 if (CardRule::IsNormalCard(c) && CardRule::GetSuit(c) == 0 && CardRule::GetRank(c) == rank) {
-                    // 该玩家尚未在队列中 → 加入
                     if (std::find(bidder_queue.begin(), bidder_queue.end(), i) == bidder_queue.end()) {
                         bidder_queue.push_back(i);
                     }
@@ -161,30 +254,36 @@ void Room::BuildBidderQueue() {
 }
 
 // ===================================================================
-// Room::StartGame —— 洗牌发牌，构建叫地主队列，状态切 BIDDING
+// Room::StartGame
 // ===================================================================
 void Room::StartGame() {
     std::mt19937 rng(std::random_device{}());
     DealCards(rng);
     BuildBidderQueue();
 
-    // 重置叫地主状态
+    current_round++;
+
     for (int i = 0; i < 5; ++i) {
         players[i].is_landlord = false;
         players[i].has_passed_bidding = false;
         players[i].has_played = false;
+        players[i].is_ready = false;
         players[i].reconnect_token = GenerateToken();
+        round_scores[i] = 0;
     }
     landlord_count = 0;
     current_bidder_pos = 0;
     multiplier = 1;
+    bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+    bottom_pick_count = 0;
+    bottom_pick_landlord = -1;
 
     state = RoomState::BIDDING;
     BroadcastState();
 }
 
 // ===================================================================
-// Room::HandleBidding —— 按 bidder_queue 动态顺位叫地主
+// Room::HandleBidding
 // ===================================================================
 void Room::HandleBidding(int fd, const std::string& json) {
     if (state != RoomState::BIDDING) return;
@@ -192,7 +291,6 @@ void Room::HandleBidding(int fd, const std::string& json) {
     int idx = GetPlayerIndex(fd);
     if (idx == -1) return;
 
-    // 检查是否轮到该玩家表态
     if (current_bidder_pos >= static_cast<int>(bidder_queue.size())) return;
     int expected_bidder = bidder_queue[current_bidder_pos];
     if (idx != expected_bidder) {
@@ -217,24 +315,14 @@ void Room::HandleBidding(int fd, const std::string& json) {
 
     current_bidder_pos++;
 
-    // 检查叫地主是否结束
     if (landlord_count >= 2) {
-        // 凑齐 2 个地主 → 进入出牌阶段
-        DistributeBottomCards();
-
-        state = RoomState::PLAYING;
-        // 持有更小方块的地主先手（bidder_queue 中靠前的）
-        for (int candidate : bidder_queue) {
-            if (players[candidate].is_landlord) {
-                current_turn = candidate;
-                break;
-            }
-        }
-        last_player_idx = -1;
-        last_played_cards.clear();
-        pass_count = 0;
+        // 凑齐 2 个地主 → 进入底牌选择阶段
+        state = RoomState::BOTTOM_PICK;
+        bottom_pick_count = 0;
+        bottom_pick_indices[0] = bottom_pick_indices[1] = -1;
+        bottom_pick_landlord = GetFirstLandlord();
     } else if (current_bidder_pos >= static_cast<int>(bidder_queue.size())) {
-        // 所有人（队列遍历完）都不叫 → 重新洗牌发牌
+        // 所有人都不叫 → 重新洗牌发牌
         StartGame();
         return;
     }
@@ -243,58 +331,115 @@ void Room::HandleBidding(int fd, const std::string& json) {
 }
 
 // ===================================================================
-// Room::DistributeBottomCards —— 底牌随机分两份，方块小的地主先选
+// Room::HandlePickBottom —— 底牌选择阶段
 // ===================================================================
-void Room::DistributeBottomCards() {
-    if (bottom_cards.size() != 4) return;
+void Room::HandlePickBottom(int fd, const std::string& json) {
+    if (state != RoomState::BOTTOM_PICK) return;
 
-    // 随机分成两堆（各 2 张）
-    std::mt19937 rng(std::random_device{}());
-    auto shuffled = bottom_cards;
-    std::shuffle(shuffled.begin(), shuffled.end(), rng);
-
-    std::vector<uint8_t> pile_a = {shuffled[0], shuffled[1]};
-    std::vector<uint8_t> pile_b = {shuffled[2], shuffled[3]};
-
-    // 找到两个地主，排序（方块更小者优先）
-    std::vector<int> landlord_indices;
-    for (int i = 0; i < 5; ++i) {
-        if (players[i].is_landlord) landlord_indices.push_back(i);
+    int idx = GetPlayerIndex(fd);
+    if (idx == -1) return;
+    if (idx != bottom_pick_landlord) {
+        SendError(on_send, fd, "NOT_YOUR_PICK", "不是你在选底牌");
+        return;
     }
-    // 按持有的最小方块排序
-    std::sort(landlord_indices.begin(), landlord_indices.end(),
-        [this](int a, int b) {
-            // 找到各玩家手中最小的方块 rank
-            auto find_min_diamond = [](const std::vector<uint8_t>& hand) -> int {
-                int min_rank = 999;
-                for (uint8_t c : hand) {
-                    if (CardRule::IsNormalCard(c) && CardRule::GetSuit(c) == 0) {
-                        int r = CardRule::GetRank(c);
-                        if (r < min_rank) min_rank = r;
+
+    // 解析 indices 数组
+    std::vector<int> indices;
+    size_t pos = json.find("\"indices\"");
+    if (pos != std::string::npos) {
+        pos = json.find('[', pos);
+        if (pos != std::string::npos) {
+            size_t end = json.find(']', pos);
+            if (end != std::string::npos) {
+                std::string arr = json.substr(pos + 1, end - pos - 1);
+                size_t start = 0;
+                while (start < arr.size()) {
+                    while (start < arr.size() && (arr[start] == ',' || arr[start] == ' ')) start++;
+                    if (start >= arr.size()) break;
+                    size_t num_end = start;
+                    while (num_end < arr.size() && arr[num_end] >= '0' && arr[num_end] <= '9') num_end++;
+                    if (num_end > start) {
+                        indices.push_back(std::stoi(arr.substr(start, num_end - start)));
                     }
+                    start = num_end;
                 }
-                return min_rank;
-            };
-            return find_min_diamond(players[a].hand) < find_min_diamond(players[b].hand);
-        });
+            }
+        }
+    }
 
-    int first_pick = landlord_indices[0];
-    int second_pick = landlord_indices[1];
+    if (indices.size() != 2) {
+        SendError(on_send, fd, "BAD_PICK", "必须选 2 张底牌");
+        return;
+    }
 
-    // 方块小的地主先选（先拿 pile_a）
-    auto& hand_first = players[first_pick].hand;
-    hand_first.insert(hand_first.end(), pile_a.begin(), pile_a.end());
-    CardRule::SortHand(hand_first);
+    // 验证索引范围
+    for (int i : indices) {
+        if (i < 0 || i >= 4) {
+            SendError(on_send, fd, "BAD_INDEX", "底牌索引必须在 0-3");
+            return;
+        }
+    }
+    if (indices[0] == indices[1]) {
+        SendError(on_send, fd, "DUPLICATE_INDEX", "不能选同一张底牌");
+        return;
+    }
 
-    auto& hand_second = players[second_pick].hand;
-    hand_second.insert(hand_second.end(), pile_b.begin(), pile_b.end());
-    CardRule::SortHand(hand_second);
+    // 记录选择
+    bottom_pick_indices[0] = indices[0];
+    bottom_pick_indices[1] = indices[1];
+    bottom_pick_count = 2;
 
-    bottom_cards.clear();
+    // 分出选中的和不选的底牌
+    std::vector<uint8_t> picked = {bottom_cards[indices[0]], bottom_cards[indices[1]]};
+    std::vector<uint8_t> remaining;
+    for (int i = 0; i < 4; ++i) {
+        if (i != indices[0] && i != indices[1]) {
+            remaining.push_back(bottom_cards[i]);
+        }
+    }
+
+    DistributeBottomCardsAfterPick(picked, remaining);
+
+    // 进入出牌阶段
+    state = RoomState::PLAYING;
+    int first_landlord = GetFirstLandlord();
+    current_turn = first_landlord;
+    last_player_idx = -1;
+    last_played_cards.clear();
+    pass_count = 0;
+
+    BroadcastState();
 }
 
 // ===================================================================
-// Room::HandlePlaying —— 出牌阶段
+// Room::DistributeBottomCardsAfterPick
+// ===================================================================
+void Room::DistributeBottomCardsAfterPick(const std::vector<uint8_t>& picked,
+                                           const std::vector<uint8_t>& remaining) {
+    int first = GetFirstLandlord();
+    int second = GetSecondLandlord();
+
+    // 地主A（方块小的，先选）拿 picked
+    auto& hand_first = players[first].hand;
+    hand_first.insert(hand_first.end(), picked.begin(), picked.end());
+    CardRule::SortHand(hand_first);
+
+    // 地主B 拿剩下的
+    if (second != -1) {
+        auto& hand_second = players[second].hand;
+        hand_second.insert(hand_second.end(), remaining.begin(), remaining.end());
+        CardRule::SortHand(hand_second);
+    }
+
+    // 保留底牌用于序列化
+    std::vector<uint8_t> all_bottom;
+    all_bottom.insert(all_bottom.end(), picked.begin(), picked.end());
+    all_bottom.insert(all_bottom.end(), remaining.begin(), remaining.end());
+    bottom_cards = all_bottom;
+}
+
+// ===================================================================
+// Room::HandlePlaying
 // ===================================================================
 void Room::HandlePlaying(int fd, const std::string& json) {
     if (state != RoomState::PLAYING) return;
@@ -307,14 +452,12 @@ void Room::HandlePlaying(int fd, const std::string& json) {
     }
     if (players[idx].IsHandEmpty()) return;
 
-    // 解析 action 字段（简易字符串解析，避免引入 json 库）
     bool is_pass = (json.find("\"PASS\"") != std::string::npos ||
                     json.find("\"action\":\"PASS\"") != std::string::npos);
     bool is_play = (json.find("\"PLAY\"") != std::string::npos ||
                     json.find("\"action\":\"PLAY\"") != std::string::npos);
 
     if (is_pass) {
-        // 新一轮自由出牌不允许 PASS
         if (last_player_idx == -1) {
             SendError(on_send, fd, "CANNOT_PASS", "新一轮出牌不能跳过");
             return;
@@ -322,7 +465,6 @@ void Room::HandlePlaying(int fd, const std::string& json) {
 
         pass_count++;
         if (pass_count >= 4) {
-            // 新一轮开始
             current_turn = last_player_idx;
             last_player_idx = -1;
             last_played_cards.clear();
@@ -331,7 +473,6 @@ void Room::HandlePlaying(int fd, const std::string& json) {
             return;
         }
     } else if (is_play) {
-        // 解析 cards 数组
         std::vector<uint8_t> play_cards;
         size_t pos = json.find("\"cards\"");
         if (pos == std::string::npos) {
@@ -349,11 +490,9 @@ void Room::HandlePlaying(int fd, const std::string& json) {
             return;
         }
 
-        // 解析 [0,5,12] 格式
         std::string cards_str = json.substr(pos + 1, end - pos - 1);
         size_t start = 0;
         while (start < cards_str.size()) {
-            // 跳过逗号和空格
             while (start < cards_str.size() &&
                    (cards_str[start] == ',' || cards_str[start] == ' ')) {
                 start++;
@@ -375,7 +514,6 @@ void Room::HandlePlaying(int fd, const std::string& json) {
             return;
         }
 
-        // 验证手牌持有
         for (uint8_t c : play_cards) {
             if (std::find(players[idx].hand.begin(), players[idx].hand.end(), c) == players[idx].hand.end()) {
                 SendError(on_send, fd, "CARD_NOT_IN_HAND", "出了手里没有的牌");
@@ -383,14 +521,12 @@ void Room::HandlePlaying(int fd, const std::string& json) {
             }
         }
 
-        // 牌型判定
         CardType type = CardRule::EvaluateType(play_cards);
         if (type == CardType::INVALID) {
             SendError(on_send, fd, "INVALID_PATTERN", "牌型不合法");
             return;
         }
 
-        // 压制判定
         if (last_player_idx != -1) {
             if (!CardRule::CanBeat(play_cards, last_played_cards)) {
                 SendError(on_send, fd, "CANNOT_BEAT", "打不过桌面上的牌");
@@ -398,19 +534,16 @@ void Room::HandlePlaying(int fd, const std::string& json) {
             }
         }
 
-        // 检查炸弹，更新倍数
         if (type == CardType::BOMB) {
-            // 3 张炸弹 ×2，4 张炸弹 ×4
             if (play_cards.size() == 3) {
                 multiplier *= 2;
             } else if (play_cards.size() == 4) {
                 multiplier *= 4;
             }
         } else if (type == CardType::ROCKET) {
-            multiplier *= 4; // 王炸按 4 张炸弹处理
+            multiplier *= 4;
         }
 
-        // 出牌成功
         players[idx].RemoveCards(play_cards);
         players[idx].has_played = true;
         player_last_played[idx] = play_cards;
@@ -422,17 +555,15 @@ void Room::HandlePlaying(int fd, const std::string& json) {
         return;
     }
 
-    // 检查胜负
     if (players[idx].IsHandEmpty()) {
         if (players[idx].is_landlord && CheckSpring()) {
-            multiplier *= 2;  // 春天翻倍
+            multiplier *= 2;
         }
         state = RoomState::END;
         BroadcastState();
         return;
     }
 
-    // 推进到下一个玩家
     AdvanceToNextPlayer();
     BroadcastState();
 }
@@ -482,23 +613,20 @@ void Room::AdvanceToNextPlayer() {
 void Room::SetAITakeover(int player_idx) {
     if (player_idx < 0 || player_idx >= 5) return;
     players[player_idx].fd = -1;
-    // 手牌、is_landlord 等全部保留
 }
 
 // ===================================================================
-// Room::HandleAIBidding —— AI 在叫地主阶段自动 PASS
+// Room::HandleAIBidding
 // ===================================================================
 void Room::HandleAIBidding(int player_idx) {
     if (state != RoomState::BIDDING) return;
     if (current_bidder_pos >= static_cast<int>(bidder_queue.size())) return;
     if (bidder_queue[current_bidder_pos] != player_idx) return;
 
-    // AI 一律不叫地主
     players[player_idx].has_passed_bidding = true;
     current_bidder_pos++;
 
     if (landlord_count == 0 && current_bidder_pos >= static_cast<int>(bidder_queue.size())) {
-        // 所有人都没叫（包括 AI）→ 重新发牌
         StartGame();
         return;
     }
@@ -507,7 +635,43 @@ void Room::HandleAIBidding(int player_idx) {
 }
 
 // ===================================================================
-// Room::ExecuteAIDecision —— AI 出牌决策执行
+// Room::HandleAIPickBottom —— AI 在底牌选择阶段随机选 2 张
+// ===================================================================
+void Room::HandleAIPickBottom(int player_idx) {
+    if (state != RoomState::BOTTOM_PICK) return;
+    if (player_idx != bottom_pick_landlord) return;
+
+    // AI 随机选 2 张
+    std::mt19937 rng(std::random_device{}());
+    int i0 = rng() % 4;
+    int i1 = (i0 + 1 + (rng() % 3)) % 4;
+
+    bottom_pick_indices[0] = i0;
+    bottom_pick_indices[1] = i1;
+    bottom_pick_count = 2;
+
+    std::vector<uint8_t> picked = {bottom_cards[i0], bottom_cards[i1]};
+    std::vector<uint8_t> remaining;
+    for (int i = 0; i < 4; ++i) {
+        if (i != i0 && i != i1) {
+            remaining.push_back(bottom_cards[i]);
+        }
+    }
+
+    DistributeBottomCardsAfterPick(picked, remaining);
+
+    state = RoomState::PLAYING;
+    int first_landlord = GetFirstLandlord();
+    current_turn = first_landlord;
+    last_player_idx = -1;
+    last_played_cards.clear();
+    pass_count = 0;
+
+    BroadcastState();
+}
+
+// ===================================================================
+// Room::ExecuteAIDecision
 // ===================================================================
 void Room::ExecuteAIDecision(int player_idx, const std::string& action,
                               const std::vector<uint8_t>& cards) {
@@ -516,7 +680,6 @@ void Room::ExecuteAIDecision(int player_idx, const std::string& action,
     if (players[player_idx].IsHandEmpty()) return;
 
     if (action == "PASS") {
-        // 新一轮自由出牌不允许 PASS
         if (last_player_idx == -1) return;
 
         pass_count++;
@@ -531,24 +694,20 @@ void Room::ExecuteAIDecision(int player_idx, const std::string& action,
     } else if (action == "PLAY") {
         if (cards.empty()) return;
 
-        // 防幻觉：验证手牌持有
         for (uint8_t c : cards) {
             if (std::find(players[player_idx].hand.begin(),
                           players[player_idx].hand.end(), c) == players[player_idx].hand.end()) {
-                return; // AI 出了自己没有的牌，视为 PASS
+                return;
             }
         }
 
-        // 牌型判定
         CardType type = CardRule::EvaluateType(cards);
         if (type == CardType::INVALID) return;
 
-        // 压制判定
         if (last_player_idx != -1) {
             if (!CardRule::CanBeat(cards, last_played_cards)) return;
         }
 
-        // 炸弹翻倍
         if (type == CardType::BOMB) {
             if (cards.size() == 3) multiplier *= 2;
             else if (cards.size() == 4) multiplier *= 4;
@@ -566,7 +725,6 @@ void Room::ExecuteAIDecision(int player_idx, const std::string& action,
         return;
     }
 
-    // 检查胜负
     if (players[player_idx].IsHandEmpty()) {
         if (players[player_idx].is_landlord && CheckSpring()) {
             multiplier *= 2;
@@ -587,15 +745,73 @@ std::string Room::SerializeState(int player_idx) const {
     std::ostringstream ss;
     ss << "{";
 
-    // state
     const char* state_str = "WAITING";
     switch (state) {
-        case RoomState::BIDDING: state_str = "BIDDING"; break;
-        case RoomState::PLAYING: state_str = "PLAYING"; break;
-        case RoomState::END:     state_str = "END"; break;
+        case RoomState::BIDDING:     state_str = "BIDDING"; break;
+        case RoomState::BOTTOM_PICK: state_str = "BOTTOM_PICK"; break;
+        case RoomState::PLAYING:     state_str = "PLAYING"; break;
+        case RoomState::END:         state_str = "END"; break;
         default: break;
     }
     ss << "\"state\":\"" << state_str << "\"";
+
+    // my_seat
+    ss << ",\"my_seat\":" << player_idx;
+
+    // ---- WAITING 状态：完整房间状态 ----
+    if (state == RoomState::WAITING) {
+        ss << ",\"owner_seat\":" << owner_seat;
+        ss << ",\"total_rounds\":" << total_rounds;
+        ss << ",\"current_round\":" << current_round;
+
+        // player_names
+        ss << ",\"player_names\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            ss << "\"" << players[i].name << "\"";
+        }
+        ss << "]";
+
+        // player_avatars
+        ss << ",\"player_avatars\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            ss << players[i].avatar;
+        }
+        ss << "]";
+
+        // ready_states
+        ss << ",\"ready_states\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            ss << (players[i].is_ready ? "true" : "false");
+        }
+        ss << "]";
+
+        // cumulative_scores
+        ss << ",\"cumulative_scores\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            ss << cumulative_scores[i];
+        }
+        ss << "]";
+
+        // 每个座位的在线状态
+        ss << ",\"player_online\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            ss << (players[i].fd != -1 ? "true" : "false");
+        }
+        ss << "]";
+
+        // reconnect_token
+        ss << ",\"reconnect_token\":\"" << players[player_idx].reconnect_token << "\"";
+
+        ss << "}";
+        return ss.str();
+    }
+
+    // ---- 非 WAITING 状态：游戏数据 ----
 
     // my_cards
     ss << ",\"my_cards\":[";
@@ -606,10 +822,7 @@ std::string Room::SerializeState(int player_idx) const {
     }
     ss << "]";
 
-    // my_seat (客户端据此判断是否轮到自己、该显示哪个UI)
-    ss << ",\"my_seat\":" << player_idx;
-
-    // player_card_counts (每人剩余张数)
+    // player_card_counts
     ss << ",\"player_card_counts\":[";
     for (int i = 0; i < 5; ++i) {
         if (i > 0) ss << ",";
@@ -625,17 +838,17 @@ std::string Room::SerializeState(int player_idx) const {
 
     // landlords
     ss << ",\"landlords\":[";
-    bool first_landlord = true;
+    bool first_l = true;
     for (int i = 0; i < 5; ++i) {
         if (players[i].is_landlord) {
-            if (!first_landlord) ss << ",";
+            if (!first_l) ss << ",";
             ss << i;
-            first_landlord = false;
+            first_l = false;
         }
     }
     ss << "]";
 
-    // player_last_played (每人最近一次出的牌)
+    // player_last_played
     ss << ",\"player_last_played\":{";
     bool first_plp = true;
     for (int i = 0; i < 5; ++i) {
@@ -665,11 +878,41 @@ std::string Room::SerializeState(int player_idx) const {
     // multiplier
     ss << ",\"multiplier\":" << multiplier;
 
-    // reconnect_token (重连用)
+    // reconnect_token
     ss << ",\"reconnect_token\":\"" << players[player_idx].reconnect_token << "\"";
 
-    // has_played (客户端判断春天态)
+    // has_played
     ss << ",\"has_played\":" << (players[player_idx].has_played ? "true" : "false");
+
+    // player_names / player_avatars (all states)
+    ss << ",\"player_names\":[";
+    for (int i = 0; i < 5; ++i) {
+        if (i > 0) ss << ",";
+        ss << "\"" << players[i].name << "\"";
+    }
+    ss << "]";
+
+    ss << ",\"player_avatars\":[";
+    for (int i = 0; i < 5; ++i) {
+        if (i > 0) ss << ",";
+        ss << players[i].avatar;
+    }
+    ss << "]";
+
+    // current_round / total_rounds
+    ss << ",\"current_round\":" << current_round;
+    ss << ",\"total_rounds\":" << total_rounds;
+
+    // cumulative_scores
+    ss << ",\"cumulative_scores\":[";
+    for (int i = 0; i < 5; ++i) {
+        if (i > 0) ss << ",";
+        ss << cumulative_scores[i];
+    }
+    ss << "]";
+
+    // owner_seat
+    ss << ",\"owner_seat\":" << owner_seat;
 
     // BIDDING 阶段额外字段
     if (state == RoomState::BIDDING) {
@@ -679,7 +922,20 @@ std::string Room::SerializeState(int player_idx) const {
                                           ? bidder_queue[current_bidder_pos] : -1);
     }
 
-    // PLAYING/END 阶段底牌可见
+    // BOTTOM_PICK 阶段额外字段
+    if (state == RoomState::BOTTOM_PICK) {
+        // 地主A（选牌者）不能看底牌值，只发数量
+        ss << ",\"bottom_cards_count\":" << bottom_cards.size();
+        ss << ",\"bottom_pick_landlord\":" << bottom_pick_landlord;
+        // 只有地主A能看到这个
+        ss << ",\"is_picking\":" << (player_idx == bottom_pick_landlord ? "true" : "false");
+        // 所选索引（选了之后才发送）
+        if (bottom_pick_count > 0) {
+            ss << ",\"bottom_pick_indices\":[" << bottom_pick_indices[0] << "," << bottom_pick_indices[1] << "]";
+        }
+    }
+
+    // PLAYING/END 阶段底牌可见（发真实卡牌值）
     if (state == RoomState::PLAYING || state == RoomState::END) {
         ss << ",\"bottom_cards\":[";
         for (size_t i = 0; i < bottom_cards.size(); ++i) {
@@ -691,7 +947,6 @@ std::string Room::SerializeState(int player_idx) const {
 
     // END 阶段额外字段
     if (state == RoomState::END) {
-        // winner
         for (int i = 0; i < 5; ++i) {
             if (players[i].IsHandEmpty()) {
                 ss << ",\"winner\":" << i;
@@ -708,25 +963,65 @@ std::string Room::SerializeState(int player_idx) const {
                 break;
             }
         }
-        // 底分 × 倍数
-        int64_t base = multiplier;  // multiplier 已含炸弹/春天翻倍
-        ss << ",\"scores\":[";
+
+        int64_t base = multiplier;
+        ss << ",\"round_scores\":[";
         for (int i = 0; i < 5; ++i) {
             if (i > 0) ss << ",";
             int64_t score = 0;
             if (landlord_win) {
-                // 地主赢: 每个地主从每个农民赢 base
                 score = players[i].is_landlord ? (3 * base) : (-2 * base);
             } else {
-                // 农民赢: 每个农民从每个地主赢 base
                 score = players[i].is_landlord ? (-3 * base) : (2 * base);
             }
             ss << score;
         }
         ss << "]";
+
+        // cumulative_scores (本局结束后的累计)
+        ss << ",\"cumulative_scores\":[";
+        for (int i = 0; i < 5; ++i) {
+            if (i > 0) ss << ",";
+            int64_t cum = cumulative_scores[i];
+            if (landlord_win) {
+                cum += players[i].is_landlord ? (3 * base) : (-2 * base);
+            } else {
+                cum += players[i].is_landlord ? (-3 * base) : (2 * base);
+            }
+            ss << cum;
+        }
+        ss << "]";
+
+        ss << ",\"current_round\":" << current_round;
+        ss << ",\"total_rounds\":" << total_rounds;
     }
 
+    // 每个座位的在线状态
+    ss << ",\"player_online\":[";
+    for (int i = 0; i < 5; ++i) {
+        if (i > 0) ss << ",";
+        ss << (players[i].fd != -1 ? "true" : "false");
+    }
+    ss << "]";
+
     ss << "}";
+    return ss.str();
+}
+
+// ===================================================================
+// Room::SerializeRoomInfo —— 给大厅玩家的房间摘要
+// ===================================================================
+std::string Room::SerializeRoomInfo(int room_id) const {
+    int count = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (players[i].fd != -1) count++;
+    }
+
+    std::ostringstream ss;
+    ss << "{\"room_id\":" << room_id
+       << ",\"player_count\":" << count
+       << ",\"state\":\"" << (state == RoomState::WAITING ? "WAITING" : "PLAYING") << "\""
+       << "}";
     return ss.str();
 }
 

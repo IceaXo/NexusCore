@@ -1,9 +1,11 @@
 #include "EpollServer.h"
-#include <cerrno>       // errno, EAGAIN
-#include <ctime>        // time(nullptr) for heartbeat
-#include <fcntl.h>      // fcntl, O_NONBLOCK
+#include <cerrno>
+#include <ctime>
+#include <fcntl.h>
 
-EpollServer::EpollServer(int _port) : port(_port), server_fd(-1), epoll_fd(-1) {}
+EpollServer::EpollServer(const ServerConfig& cfg)
+    : config(cfg), server_fd(-1), epoll_fd(-1) {}
+
 EpollServer::~EpollServer() {
     if (server_fd != -1) close(server_fd);
     if (epoll_fd != -1) close(epoll_fd);
@@ -22,7 +24,7 @@ bool EpollServer::Start() {
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(port);
+    server_addr.sin_port = htons(config.port);
 
     if (bind(server_fd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == -1) {
         std::cerr << "绑定失败" << std::endl;
@@ -34,7 +36,6 @@ bool EpollServer::Start() {
         return false;
     }
 
-    // ET 模式必须非阻塞，否则 accept 在队列空时会卡死线程
     int flags = fcntl(server_fd, F_GETFL, 0);
     fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
 
@@ -44,15 +45,13 @@ bool EpollServer::Start() {
         return false;
     }
 
-    std::cout << "服务器启动成功！正监听房间号: " << port << std::endl;
+    std::cout << "服务器启动成功！监听端口: " << config.port
+              << " 房间池: " << config.max_rooms
+              << " 默认局数: " << config.default_rounds << std::endl;
     room_manager.SetConnectionMap(&connections);
     return true;
 }
 
-// ===================================================================
-//  ET 模式下循环 accept 直到 EAGAIN，设非阻塞，挂 EPOLLIN|EPOLLOUT|EPOLLET
-//  文档：HandleAccept —— 接收新连接，加入 connections，挂载 EPOLLIN
-// ===================================================================
 void EpollServer::HandleAccept() {
     while (true) {
         int client_fd = accept(server_fd, nullptr, nullptr);
@@ -76,13 +75,11 @@ void EpollServer::HandleAccept() {
 
         std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
         connections.emplace(client_fd, client_fd);
-        room_manager.AddPlayer(client_fd);
+        // 新玩家进入大厅，不再自动分配房间
+        room_manager.AddToLobby(client_fd);
     }
 }
 
-// ===================================================================
-//  文档：HandleRead —— ReadFromSocket → 循环 ExtractMessage → RoomManager::OnMessage
-// ===================================================================
 bool EpollServer::HandleRead(int fd) {
     auto it = connections.find(fd);
     if (it == connections.end()) return false;
@@ -100,7 +97,6 @@ bool EpollServer::HandleRead(int fd) {
 
     while (true) {
         std::string json_msg = it->second.ExtractMessage();
-        // 检测到恶意超大包头，立刻踢掉
         if (it->second.bad_packet) {
             std::cerr << "玩家 " << fd << " 发送超大非法包，踢掉" << std::endl;
             room_manager.RemovePlayer(fd);
@@ -116,9 +112,6 @@ bool EpollServer::HandleRead(int fd) {
     return true;
 }
 
-// ===================================================================
-//  EPOLLOUT 出口：查 Connection send_buffer 并刷出
-// ===================================================================
 void EpollServer::HandleWrite(int fd) {
     auto it = connections.find(fd);
     if (it != connections.end()) {
@@ -132,13 +125,9 @@ void EpollServer::HandleWrite(int fd) {
     }
 }
 
-// ===================================================================
-//  主循环：注册 server_fd + IPC，死循环 epoll_wait，按 fd 分发给三个 Handler
-// ===================================================================
 void EpollServer::Loop() {
     std::cout << "经理上班" << std::endl;
 
-    // 步骤一：把大门挂上 epoll 红黑树（ET 边缘触发）
     epoll_event ev{};
     ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = server_fd;
@@ -147,8 +136,7 @@ void EpollServer::Loop() {
         return;
     }
 
-    // 步骤二：连接 Python AI 进程，把 ipc_fd 也挂上 epoll
-    if (ipc_client.ConnectToAI(8081)) {
+    if (ipc_client.ConnectToAI(config.ipc_port)) {
         room_manager.SetIPCClient(&ipc_client);
         epoll_event ipc_ev{};
         ipc_ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
@@ -160,7 +148,6 @@ void EpollServer::Loop() {
     const int MAX_EVENTS = 1024;
     epoll_event events[MAX_EVENTS];
 
-    // 步骤三：死循环
     while (true) {
         int num_ready = epoll_wait(epoll_fd, events, MAX_EVENTS, 1000);
         if (num_ready == -1) {
@@ -168,7 +155,6 @@ void EpollServer::Loop() {
             return;
         }
 
-        // 心跳超时检测：扫描所有连接，踢掉 30s 以上无消息的
         for (auto it = connections.begin(); it != connections.end(); ) {
             if (it->second.IsHeartbeatTimeout()) {
                 int stale_fd = it->first;
@@ -186,12 +172,11 @@ void EpollServer::Loop() {
             int fd = events[i].data.fd;
             uint32_t revents = events[i].events;
 
-            // 挂断/错误：内核已关闭连接或发生异常
             if (revents & (EPOLLHUP | EPOLLERR)) {
                 if (fd == ipc_client.ipc_fd) {
                     std::cerr << "[EpollServer] IPC 连接异常 (HUP/ERR)" << std::endl;
                 } else if (fd != server_fd) {
-                    HandleRead(fd); // HandleRead 内部发现断线会清理
+                    HandleRead(fd);
                 }
                 continue;
             }
@@ -218,7 +203,6 @@ void EpollServer::Loop() {
                 if (revents & EPOLLIN) {
                     alive = HandleRead(fd);
                 }
-                // 读失败说明已断线/踢掉，跳过 EPOLLOUT 避免鞭尸
                 if (alive && (revents & EPOLLOUT)) {
                     HandleWrite(fd);
                 }

@@ -1,0 +1,6 @@
+{
+    "port": 8080,
+    "max_rooms": 5,
+    "default_rounds": 5,
+    "ipc_port": 8081
+}

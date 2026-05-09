@@ -4,12 +4,12 @@
 #include "CardRule.h"
 #include <iostream>
 #include <sstream>
-#include <algorithm>   // std::min_element
-#include <cstring>     // std::memcpy
-#include <arpa/inet.h> // htonl
+#include <algorithm>
+#include <cstring>
+#include <arpa/inet.h>
 
 // ===================================================================
-// RoomManager::RoomManager —— 预分配 2000 房间对象池
+// RoomManager::RoomManager
 // ===================================================================
 RoomManager::RoomManager() {
     rooms.reserve(MAX_ROOMS);
@@ -19,7 +19,7 @@ RoomManager::RoomManager() {
 }
 
 // ===================================================================
-// RoomManager::SetConnectionMap
+// RoomManager::SetConnectionMap / SetIPCClient
 // ===================================================================
 void RoomManager::SetConnectionMap(std::unordered_map<int, class Connection>* conn_map) {
     connections = conn_map;
@@ -39,7 +39,6 @@ void RoomManager::BindSendCallback(Room& room) {
         auto it = connections->find(fd);
         if (it == connections->end()) return;
 
-        // 打包：[4字节大端长度头][JSON body]
         uint32_t net_len = htonl(static_cast<uint32_t>(json.size()));
         std::string packet(4, '\0');
         std::memcpy(&packet[0], &net_len, 4);
@@ -51,10 +50,27 @@ void RoomManager::BindSendCallback(Room& room) {
 }
 
 // ===================================================================
+// 向单个玩家发送 JSON（大厅用）
+// ===================================================================
+static void SendToPlayer(std::unordered_map<int, Connection>* connections,
+                         int fd, const std::string& json) {
+    if (!connections) return;
+    auto it = connections->find(fd);
+    if (it == connections->end()) return;
+
+    uint32_t net_len = htonl(static_cast<uint32_t>(json.size()));
+    std::string packet(4, '\0');
+    std::memcpy(&packet[0], &net_len, 4);
+    packet.append(json);
+
+    it->second.send_buffer.append(packet);
+    it->second.WriteToSocket();
+}
+
+// ===================================================================
 // RoomManager::FindWaitingRoom
 // ===================================================================
 int RoomManager::FindWaitingRoom() {
-    // 优先找 WAITING 房间
     for (int i = 0; i < MAX_ROOMS; ++i) {
         if (rooms[i].state == RoomState::WAITING) {
             for (int j = 0; j < 5; ++j) {
@@ -62,7 +78,6 @@ int RoomManager::FindWaitingRoom() {
             }
         }
     }
-    // 回收 END 房间
     for (int i = 0; i < MAX_ROOMS; ++i) {
         if (rooms[i].state == RoomState::END) {
             rooms[i].ResetRoom();
@@ -83,40 +98,112 @@ int RoomManager::FindEmptySeat(const Room& room) {
 }
 
 // ===================================================================
-// RoomManager::AddPlayer
+// RoomManager::IsInLobby
 // ===================================================================
-bool RoomManager::AddPlayer(int fd) {
-    // 先检查是否已在某房间（重连场景先清理旧座位）
+bool RoomManager::IsInLobby(int fd) const {
+    return lobby_players.find(fd) != lobby_players.end();
+}
+
+// ===================================================================
+// RoomManager::AddToLobby —— 新连接进入大厅
+// ===================================================================
+void RoomManager::AddToLobby(int fd) {
+    // 清理旧状态
     auto existing = fd_to_location.find(fd);
     if (existing != fd_to_location.end()) {
         RemovePlayer(fd);
     }
+    lobby_players[fd] = {"", 0};
 
-    int room_idx = FindWaitingRoom();
-    if (room_idx == -1) {
-        std::cerr << "[RoomManager] 所有房间已满，拒绝玩家 fd=" << fd << std::endl;
-        return false;
+    // 发送房间列表
+    std::ostringstream ss;
+    ss << "{\"type\":\"room_list\",\"rooms\":[";
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        if (i > 0) ss << ",";
+        ss << rooms[i].SerializeRoomInfo(i + 1); // room_id 从 1 开始
     }
+    ss << "]}";
+    SendToPlayer(connections, fd, ss.str());
+}
 
-    int seat = FindEmptySeat(rooms[room_idx]);
-    if (seat == -1) return false; // 理论上不会到这里
+// ===================================================================
+// RoomManager::BroadcastRoomList —— 广播给所有大厅玩家
+// ===================================================================
+void RoomManager::BroadcastRoomList() {
+    std::ostringstream ss;
+    ss << "{\"type\":\"room_list\",\"rooms\":[";
+    for (int i = 0; i < MAX_ROOMS; ++i) {
+        if (i > 0) ss << ",";
+        ss << rooms[i].SerializeRoomInfo(i + 1);
+    }
+    ss << "]}";
+
+    std::string json = ss.str();
+    for (const auto& kv : lobby_players) {
+        SendToPlayer(connections, kv.first, json);
+    }
+}
+
+// ===================================================================
+// RoomManager::JoinRoom
+// ===================================================================
+bool RoomManager::JoinRoom(int fd, int room_id) {
+    // room_id 1-5 映射到 rooms[0-4]
+    int room_idx = room_id - 1;
+    if (room_idx < 0 || room_idx >= MAX_ROOMS) return false;
 
     Room& room = rooms[room_idx];
-    PlayerContext& player = room.players[seat];
-    player.fd = fd;
-    player.hand.clear();
-    player.is_landlord = false;
-    player.has_passed_bidding = false;
+
+    // 只允许加入 WAITING 或 END 状态的房间
+    if (room.state != RoomState::WAITING && room.state != RoomState::END) return false;
+    if (room.state == RoomState::END) {
+        room.ResetRoom();
+    }
+
+    // 找空座位
+    int seat = FindEmptySeat(room);
+    if (seat == -1) return false; // 满员
+
+    // 从大厅移除
+    auto lobby_it = lobby_players.find(fd);
+    if (lobby_it != lobby_players.end()) {
+        PlayerContext& player = room.players[seat];
+        player.fd = fd;
+        player.name = lobby_it->second.name;
+        player.avatar = lobby_it->second.avatar;
+        player.is_ready = false;
+        lobby_players.erase(lobby_it);
+    } else {
+        // 不在大厅（重连等场景），直接分配
+        room.players[seat].fd = fd;
+        room.players[seat].is_ready = false;
+    }
+
+    // 第一个进入的玩家成为房主
+    if (room.owner_seat == -1 || room.players[room.owner_seat].fd == -1) {
+        room.owner_seat = seat;
+    }
 
     fd_to_location[fd] = {room_idx, seat};
     BindSendCallback(room);
 
-    // 检查是否满 5 人 → 开局
+    // 推送房间状态给该玩家
+    if (room.on_send) {
+        room.on_send(fd, room.SerializeState(seat));
+    }
+
+    // 广播房间状态给房间内其他人
+    room.BroadcastState();
+
+    // 更新房间列表给大厅玩家
+    BroadcastRoomList();
+
+    // 检查是否满 5 人且全部 ready → 开局
     int player_count = 0;
     for (int i = 0; i < 5; ++i) {
         if (room.players[i].fd != -1) player_count++;
     }
-    if (player_count == 5) {
+    if (player_count == 5 && room.AllReady()) {
         room.StartGame();
     }
 
@@ -124,9 +211,59 @@ bool RoomManager::AddPlayer(int fd) {
 }
 
 // ===================================================================
-// RoomManager::RemovePlayer
+// RoomManager::LeaveRoom
+// ===================================================================
+void RoomManager::LeaveRoom(int fd) {
+    auto it = fd_to_location.find(fd);
+    if (it == fd_to_location.end()) return;
+
+    int room_idx = it->second.room_idx;
+    int player_idx = it->second.player_idx;
+    Room& room = rooms[room_idx];
+
+    // 保存名字和头像
+    std::string name = room.players[player_idx].name;
+    int avatar = room.players[player_idx].avatar;
+
+    // 清空座位
+    room.players[player_idx].fd = -1;
+    room.players[player_idx].is_ready = false;
+
+    fd_to_location.erase(it);
+
+    // 房主转移
+    if (room.owner_seat == player_idx) {
+        room.TransferOwnership();
+    }
+
+    // 如果房间空了，重置
+    bool all_empty = true;
+    for (int i = 0; i < 5; ++i) {
+        if (room.players[i].fd != -1) { all_empty = false; break; }
+    }
+    if (all_empty) {
+        room.FullReset();
+    }
+
+    // 玩家回到大厅
+    lobby_players[fd] = {name, avatar};
+
+    // 广播房间状态
+    room.BroadcastState();
+    BroadcastRoomList();
+}
+
+// ===================================================================
+// RoomManager::RemovePlayer —— 断线处理
 // ===================================================================
 void RoomManager::RemovePlayer(int fd) {
+    // 大厅玩家断线
+    auto lobby_it = lobby_players.find(fd);
+    if (lobby_it != lobby_players.end()) {
+        lobby_players.erase(lobby_it);
+        return;
+    }
+
     auto it = fd_to_location.find(fd);
     if (it == fd_to_location.end()) return;
 
@@ -135,33 +272,224 @@ void RoomManager::RemovePlayer(int fd) {
     fd_to_location.erase(it);
 
     Room& room = rooms[room_idx];
+    bool was_owner = (room.owner_seat == player_idx);
 
     switch (room.state) {
         case RoomState::WAITING: {
+            // WAITING 状态断线：AI 接管，自动 is_ready = true
             room.players[player_idx].fd = -1;
+            room.players[player_idx].is_ready = true;
+
+            // 房主转移
+            if (was_owner) room.TransferOwnership();
+
+            // 检查是否满足开局条件（5人全 ready）
+            if (room.AllReady()) {
+                room.StartGame();
+            } else {
+                room.BroadcastState();
+                BroadcastRoomList();
+            }
             break;
         }
         case RoomState::BIDDING: {
-            // 如果断线的是当前正在叫牌的候选人 → 自动 PASS
             if (static_cast<int>(room.bidder_queue.size()) > room.current_bidder_pos &&
                 room.bidder_queue[room.current_bidder_pos] == player_idx) {
-                // 从 fd_to_location 已删，HandleBidding 用 -1 fd 调 GetPlayerIndex 会返回 -1
-                // 直接模拟 PASS
                 room.players[player_idx].fd = -1;
-                room.HandleBidding(fd, "{\"action\":\"PASS\"}");
+                room.HandleAIBidding(player_idx);
             } else {
                 room.players[player_idx].fd = -1;
             }
             break;
         }
+        case RoomState::BOTTOM_PICK: {
+            if (player_idx == room.bottom_pick_landlord) {
+                // 正在选牌的地主A断线 → AI 随机选
+                room.players[player_idx].fd = -1;
+                room.HandleAIPickBottom(player_idx);
+            } else {
+                // 地主B 或农民 → 标记断线
+                room.players[player_idx].fd = -1;
+                room.BroadcastState();
+            }
+            break;
+        }
         case RoomState::PLAYING: {
             room.SetAITakeover(player_idx);
+            room.BroadcastState();
             break;
         }
         case RoomState::END: {
             room.players[player_idx].fd = -1;
+            room.BroadcastState();
             break;
         }
+    }
+
+    // 断线后检查 AI
+    if (room.state == RoomState::PLAYING || room.state == RoomState::BIDDING ||
+        room.state == RoomState::BOTTOM_PICK) {
+        CheckAndTriggerAI(room_idx);
+    }
+}
+
+// ===================================================================
+// RoomManager::HandleSetName —— 设置名字和头像
+// ===================================================================
+void RoomManager::HandleSetName(int fd, const std::string& json) {
+    // 提取 name
+    std::string name;
+    size_t pos = json.find("\"name\"");
+    if (pos != std::string::npos) {
+        pos = json.find('"', pos + 6);
+        if (pos != std::string::npos) {
+            size_t end = json.find('"', pos + 1);
+            if (end != std::string::npos) {
+                name = json.substr(pos + 1, end - pos - 1);
+            }
+        }
+    }
+    if (name.size() > 12) name = name.substr(0, 12);
+
+    // 提取 avatar
+    int avatar = 0;
+    pos = json.find("\"avatar\"");
+    if (pos != std::string::npos) {
+        pos = json.find(':', pos);
+        if (pos != std::string::npos) {
+            avatar = std::stoi(json.substr(pos + 1));
+        }
+    }
+    if (avatar < 0 || avatar > 4) avatar = 0;
+
+    // 检查是否在房间内
+    auto it = fd_to_location.find(fd);
+    if (it != fd_to_location.end()) {
+        Room& room = rooms[it->second.room_idx];
+        int idx = it->second.player_idx;
+        room.players[idx].name = name;
+        room.players[idx].avatar = avatar;
+
+        // 广播更新后的房间状态
+        room.BroadcastState();
+        return;
+    }
+
+    // 在大厅
+    auto lobby_it = lobby_players.find(fd);
+    if (lobby_it != lobby_players.end()) {
+        lobby_it->second.name = name;
+        lobby_it->second.avatar = avatar;
+
+        // 回复确认
+        std::ostringstream ss;
+        ss << "{\"type\":\"set_name_ok\",\"name\":\"" << name
+           << "\",\"avatar\":" << avatar << "}";
+        SendToPlayer(connections, fd, ss.str());
+    }
+}
+
+// ===================================================================
+// RoomManager::HandleReady —— 准备/取消准备
+// ===================================================================
+void RoomManager::HandleReady(int fd) {
+    auto it = fd_to_location.find(fd);
+    if (it == fd_to_location.end()) return;
+
+    Room& room = rooms[it->second.room_idx];
+    if (room.state != RoomState::WAITING) return;
+
+    int idx = it->second.player_idx;
+    room.players[idx].is_ready = !room.players[idx].is_ready;
+
+    // 检查是否满 5 人且全部 ready → 开局
+    int player_count = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (room.players[i].fd != -1) player_count++;
+    }
+    if (player_count == 5 && room.AllReady()) {
+        room.StartGame();
+    } else {
+        room.BroadcastState();
+    }
+}
+
+// ===================================================================
+// RoomManager::HandleSetRounds —— 房主设定局数
+// ===================================================================
+void RoomManager::HandleSetRounds(int fd, const std::string& json) {
+    auto it = fd_to_location.find(fd);
+    if (it == fd_to_location.end()) return;
+
+    Room& room = rooms[it->second.room_idx];
+    int idx = it->second.player_idx;
+
+    // 校验房主
+    if (idx != room.owner_seat) {
+        SendToPlayer(connections, fd,
+                     "{\"type\":\"error\",\"code\":\"NOT_OWNER\",\"message\":\"只有房主可以设置局数\"}");
+        return;
+    }
+
+    // 解析 rounds
+    size_t pos = json.find("\"rounds\"");
+    if (pos == std::string::npos) return;
+    pos = json.find(':', pos);
+    if (pos == std::string::npos) return;
+    int rounds = std::stoi(json.substr(pos + 1));
+
+    // 允许 1/3/5/7/10
+    if (rounds != 1 && rounds != 3 && rounds != 5 && rounds != 7 && rounds != 10) {
+        rounds = 5;
+    }
+
+    room.total_rounds = rounds;
+    room.BroadcastState();
+}
+
+// ===================================================================
+// RoomManager::HandleContinue —— END 结算后推进
+// ===================================================================
+void RoomManager::HandleContinue(int fd) {
+    auto it = fd_to_location.find(fd);
+    if (it == fd_to_location.end()) return;
+
+    Room& room = rooms[it->second.room_idx];
+    if (room.state != RoomState::END) return;
+
+    int idx = it->second.player_idx;
+
+    // 标记该玩家已确认继续
+    // 这里简化处理：任一玩家点继续就推进（后面可改为需要所有人确认）
+    // 更新累计分数
+    bool landlord_win = false;
+    for (int i = 0; i < 5; ++i) {
+        if (room.players[i].IsHandEmpty() && room.players[i].is_landlord) {
+            landlord_win = true;
+            break;
+        }
+    }
+
+    int64_t base = room.multiplier;
+    for (int i = 0; i < 5; ++i) {
+        int64_t delta = 0;
+        if (landlord_win) {
+            delta = room.players[i].is_landlord ? (3 * base) : (-2 * base);
+        } else {
+            delta = room.players[i].is_landlord ? (-3 * base) : (2 * base);
+        }
+        room.round_scores[i] = delta;
+        room.cumulative_scores[i] += delta;
+    }
+
+    if (room.current_round >= room.total_rounds) {
+        // 最后一局结束 → 回到 WAITING 准备下一场
+        room.ResetRoom();
+        room.BroadcastState();
+        BroadcastRoomList();
+    } else {
+        // 还有下一局 → 重新发牌
+        room.StartGame();
     }
 }
 
@@ -169,13 +497,12 @@ void RoomManager::RemovePlayer(int fd) {
 // RoomManager::OnMessage
 // ===================================================================
 void RoomManager::OnMessage(int fd, const std::string& json) {
-    // 优先处理 RECONNECT 消息（玩家可能在 WAITING 房间，尚未入局）
+    // ---- RECONNECT ----
     if (json.find("\"RECONNECT\"") != std::string::npos ||
         json.find("\"action\":\"RECONNECT\"") != std::string::npos) {
-        // 提取 token
         size_t pos = json.find("\"token\"");
         if (pos != std::string::npos) {
-            pos = json.find('"', pos + 7);  // 跳过 "token"
+            pos = json.find('"', pos + 7);
             if (pos != std::string::npos) {
                 size_t end = json.find('"', pos + 1);
                 if (end != std::string::npos) {
@@ -188,27 +515,79 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
         return;
     }
 
-    // PING 保活：直接忽略，只刷新心跳时间戳
+    // ---- PING ----
     if (json.find("\"PING\"") != std::string::npos) {
         return;
     }
 
+    // ---- SET_NAME (大厅或房间内均可) ----
+    if (json.find("\"SET_NAME\"") != std::string::npos ||
+        json.find("\"action\":\"SET_NAME\"") != std::string::npos) {
+        HandleSetName(fd, json);
+        return;
+    }
+
+    // ---- 大厅消息 ----
+    if (IsInLobby(fd)) {
+        if (json.find("\"JOIN_ROOM\"") != std::string::npos ||
+            json.find("\"action\":\"JOIN_ROOM\"") != std::string::npos) {
+            size_t pos = json.find("\"room_id\"");
+            if (pos != std::string::npos) {
+                pos = json.find(':', pos);
+                if (pos != std::string::npos) {
+                    int room_id = std::stoi(json.substr(pos + 1));
+                    if (!JoinRoom(fd, room_id)) {
+                        SendToPlayer(connections, fd,
+                            "{\"type\":\"error\",\"code\":\"ROOM_FULL\",\"message\":\"房间已满或不存在\"}");
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // ---- 房间内消息 ----
     auto it = fd_to_location.find(fd);
     if (it == fd_to_location.end()) return;
 
     Room& room = rooms[it->second.room_idx];
 
+    // LEAVE_ROOM (任何状态都可以离开)
+    if (json.find("\"LEAVE_ROOM\"") != std::string::npos ||
+        json.find("\"action\":\"LEAVE_ROOM\"") != std::string::npos) {
+        LeaveRoom(fd);
+        return;
+    }
+
     switch (room.state) {
-        case RoomState::WAITING:
-            break; // 房间不满员，忽略消息
+        case RoomState::WAITING: {
+            // READY
+            if (json.find("\"READY\"") != std::string::npos ||
+                json.find("\"action\":\"READY\"") != std::string::npos) {
+                HandleReady(fd);
+            }
+            // SET_ROUNDS
+            if (json.find("\"SET_ROUNDS\"") != std::string::npos ||
+                json.find("\"action\":\"SET_ROUNDS\"") != std::string::npos) {
+                HandleSetRounds(fd, json);
+            }
+            break;
+        }
 
         case RoomState::BIDDING: {
             room.HandleBidding(fd, json);
             break;
         }
 
+        case RoomState::BOTTOM_PICK: {
+            if (json.find("\"PICK_BOTTOM\"") != std::string::npos ||
+                json.find("\"action\":\"PICK_BOTTOM\"") != std::string::npos) {
+                room.HandlePickBottom(fd, json);
+            }
+            break;
+        }
+
         case RoomState::PLAYING: {
-            // 提示消息单独处理
             if (json.find("\"HINT\"") != std::string::npos ||
                 json.find("\"action\":\"HINT\"") != std::string::npos) {
                 room.HandleHint(fd);
@@ -218,31 +597,47 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
             break;
         }
 
-        case RoomState::END:
-            break; // 游戏结束，忽略操作
+        case RoomState::END: {
+            // CONTINUE
+            if (json.find("\"CONTINUE\"") != std::string::npos ||
+                json.find("\"action\":\"CONTINUE\"") != std::string::npos) {
+                HandleContinue(fd);
+            }
+            break;
+        }
     }
 
     // 消息处理完后，检查当前回合是否为 AI 座位
-    if (room.state == RoomState::PLAYING || room.state == RoomState::BIDDING) {
+    if (room.state == RoomState::PLAYING || room.state == RoomState::BIDDING ||
+        room.state == RoomState::BOTTOM_PICK) {
         CheckAndTriggerAI(it->second.room_idx);
     }
 }
 
 // ===================================================================
-// RoomManager::CheckAndTriggerAI —— 检查并触发 AI 决策
+// RoomManager::CheckAndTriggerAI
 // ===================================================================
 void RoomManager::CheckAndTriggerAI(int room_idx) {
     Room& room = rooms[room_idx];
 
     if (room.state == RoomState::BIDDING) {
-        // 当前叫地主候选人是 AI → 自动 PASS
         if (room.current_bidder_pos < static_cast<int>(room.bidder_queue.size())) {
             int bidder = room.bidder_queue[room.current_bidder_pos];
             if (room.players[bidder].fd == -1) {
                 room.HandleAIBidding(bidder);
-                // 递归检查：AI PASS 后下一位可能又是 AI
                 CheckAndTriggerAI(room_idx);
             }
+        }
+        return;
+    }
+
+    if (room.state == RoomState::BOTTOM_PICK) {
+        if (room.bottom_pick_landlord >= 0 &&
+            room.players[room.bottom_pick_landlord].fd == -1 &&
+            room.bottom_pick_count < 2) {
+            room.HandleAIPickBottom(room.bottom_pick_landlord);
+            // 选完牌后进入 PLAYING，递归检查
+            CheckAndTriggerAI(room_idx);
         }
         return;
     }
@@ -257,11 +652,10 @@ void RoomManager::CheckAndTriggerAI(int room_idx) {
 }
 
 // ===================================================================
-// RoomManager::RequestAIDecision —— 向 Python AI 发送决策请求
+// RoomManager::RequestAIDecision
 // ===================================================================
 void RoomManager::RequestAIDecision(int room_idx, int player_idx) {
     if (!ipc_client) {
-        // 无 AI agent 时的兜底：新一轮出最小单张，否则 PASS
         Room& room = rooms[room_idx];
         if (room.last_player_idx == -1 && !room.players[player_idx].hand.empty()) {
             room.ExecuteAIDecision(player_idx, "PLAY",
@@ -276,7 +670,6 @@ void RoomManager::RequestAIDecision(int room_idx, int player_idx) {
     Room& room = rooms[room_idx];
     const PlayerContext& player = room.players[player_idx];
 
-    // 构建 AI 请求 JSON
     std::ostringstream ss;
     ss << "{"
        << "\"room_idx\":" << room_idx
@@ -302,10 +695,9 @@ void RoomManager::RequestAIDecision(int room_idx, int player_idx) {
 }
 
 // ===================================================================
-// RoomManager::ApplyAIDecision —— 收到 AI 决策回包后执行
+// RoomManager::ApplyAIDecision
 // ===================================================================
 void RoomManager::ApplyAIDecision(const std::string& json) {
-    // 解析 room_idx
     size_t pos = json.find("\"room_idx\"");
     if (pos == std::string::npos) return;
     pos = json.find(':', pos);
@@ -314,7 +706,6 @@ void RoomManager::ApplyAIDecision(const std::string& json) {
 
     if (room_idx < 0 || room_idx >= MAX_ROOMS) return;
 
-    // 解析 player_idx
     pos = json.find("\"player_idx\"");
     if (pos == std::string::npos) return;
     pos = json.find(':', pos);
@@ -323,7 +714,6 @@ void RoomManager::ApplyAIDecision(const std::string& json) {
 
     if (player_idx < 0 || player_idx >= 5) return;
 
-    // 解析 action
     std::string action;
     if (json.find("\"PLAY\"") != std::string::npos) {
         action = "PLAY";
@@ -333,7 +723,6 @@ void RoomManager::ApplyAIDecision(const std::string& json) {
         return;
     }
 
-    // 解析 cards（仅 PLAY 时）
     std::vector<uint8_t> cards;
     if (action == "PLAY") {
         pos = json.find("\"cards\"");
@@ -362,41 +751,41 @@ void RoomManager::ApplyAIDecision(const std::string& json) {
         }
     }
 
-    // 执行
     Room& room = rooms[room_idx];
     room.ExecuteAIDecision(player_idx, action, cards);
 
-    // 执行后可能又轮到下一个 AI，递归检查
     CheckAndTriggerAI(room_idx);
 }
 
 // ===================================================================
-// RoomManager::HandleReconnect —— 断线重连
+// RoomManager::HandleReconnect
 // ===================================================================
 bool RoomManager::HandleReconnect(int fd, const std::string& token) {
     if (token.empty()) return false;
 
-    // 遍历所有房间查找匹配 token 的断线座位
     for (int i = 0; i < MAX_ROOMS; ++i) {
         int player_idx = rooms[i].FindPlayerByToken(token);
         if (player_idx == -1) continue;
 
-        // 清理新 fd 被 AddPlayer 临时分配的座位（重连先走 Accept→AddPlayer）
+        // 清理新 fd 的旧状态
         auto old = fd_to_location.find(fd);
         if (old != fd_to_location.end()) {
             rooms[old->second.room_idx].players[old->second.player_idx].fd = -1;
             fd_to_location.erase(old);
         }
+        // 清理大厅记录
+        lobby_players.erase(fd);
 
-        // 恢复连接
+        // 恢复连接，is_ready 保持
         rooms[i].ReconnectPlayer(player_idx, fd);
         fd_to_location[fd] = {i, player_idx};
         BindSendCallback(rooms[i]);
 
-        // 推送当前状态给重连玩家
         if (rooms[i].on_send) {
             rooms[i].on_send(fd, rooms[i].SerializeState(player_idx));
         }
+
+        rooms[i].BroadcastState();
 
         std::cout << "[RoomManager] 玩家 fd=" << fd << " 重连成功 room=" << i
                   << " seat=" << player_idx << std::endl;
