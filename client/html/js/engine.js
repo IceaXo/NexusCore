@@ -52,8 +52,12 @@ function post(msg) {
   try {
     if (window.chrome && window.chrome.webview) {
       window.chrome.webview.postMessage(JSON.stringify(msg));
+    } else {
+      if (typeof P5 !== 'undefined' && P5.showError) P5.showError('NO_WEBVIEW');
     }
-  } catch(e) {}
+  } catch(e) {
+    if (typeof P5 !== 'undefined' && P5.showError) P5.showError('SEND_ERR:' + e.message);
+  }
 }
 
 // Expose helpers
@@ -205,12 +209,14 @@ P5.renderPlayers = function() {
     node.innerHTML =
       '<div class="player-box-wrap">' +
         '<div class="current-turn-ping"></div>' +
-        '<div class="player-box ' + (isLL?'landlord':'farmer') + '" style="background:' + (isLL ? '' : avatarColor) + ';">' +
-          '<span class="box-icon p5-font">' + iconSymbol + '</span>' +
+        '<div class="player-box" style="background:' + avatarColor + ';border-color:var(--white);">' +
+          '<span class="box-icon p5-font" style="color:var(--white);">' + iconSymbol + '</span>' +
         '</div>' +
         '<div class="player-badge"><span class="badge-inner p5-font">' + cnt[i] + '</span></div>' +
       '</div>' +
-      '<div class="player-name"><span class="p5-font">' + displayName + '</span></div>' +
+      '<div class="player-name"><span class="p5-font">' + displayName + '</span>' +
+        '<span class="player-role-tag p5-font" style="color:' + (isLL ? 'var(--blood)' : 'rgba(255,255,255,0.5)') + ';">' + (isLL ? '[地主]' : '[农民]') + '</span>' +
+      '</div>' +
       '<div class="player-score p5-font">' + (cumScores[i] >= 0 ? '+' : '') + cumScores[i] + '</div>';
 
     // Last played / PASS indicator

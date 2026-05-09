@@ -30,6 +30,17 @@ int main() {
         tcp.Send(json);
     });
 
+    // Bridge: SET_SERVER → reconnect TCP
+    host.SetOnServerChange([&tcp, &host](const std::string& hostStr, uint16_t port) {
+        std::cout << "[main] Reconnecting to " << hostStr << ":" << port << std::endl;
+        tcp.Disconnect();
+        if (!tcp.Connect(hostStr, port)) {
+            std::cerr << "[main] Could not connect to server at "
+                      << hostStr << ":" << port << std::endl;
+            host.PushState("{\"type\":\"error\",\"message\":\"Server unreachable\"}");
+        }
+    });
+
     // --- Connect to server ---
     if (!tcp.Connect(serverIP, serverPort)) {
         std::cerr << "[main] Could not connect to server at "

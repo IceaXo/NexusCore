@@ -18,6 +18,8 @@ __pycache__/
 规则文档.md
 设计文档.md
 PLAN.md
+run.md
+
 
 # Test binaries & output
 server/game/test_cardrule
@@ -54,3 +56,7 @@ C++ UI渲染方案重构.md
 # Images
 image.png
 image(perfect).png
+
+# Client distribution
+*.rar
+client/dist/

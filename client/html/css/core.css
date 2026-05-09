@@ -194,6 +194,12 @@ body {
   text-shadow: 2px 2px 0px var(--black);
 }
 
+/* Role tag [地主] / [农民] next to player name */
+.player-role-tag {
+  font-size: 11px; font-style: italic; letter-spacing: 1px;
+  margin-left: 6px;
+}
+
 .player-last-played {
   display: flex; gap: -3px; flex-wrap: nowrap;
   justify-content: flex-start; max-width: 140px;
@@ -534,6 +540,32 @@ body {
   text-shadow: 3px 3px 0px var(--blood);
 }
 
+/* Lobby player identity bar */
+.lobby-player-bar {
+  position: absolute; top: 60px; left: 50%;
+  transform: translateX(-50%) skewX(-6deg);
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 24px;
+  border: 3px solid var(--white);
+  background: var(--black);
+  cursor: pointer;
+  transition: transform 0.2s, border-color 0.2s;
+}
+.lobby-player-bar > * { transform: skewX(6deg); }
+.lobby-player-bar:hover { border-color: var(--blood); transform: translateX(-50%) skewX(-6deg) scale(1.05); }
+.lobby-avatar {
+  width: 36px; height: 36px;
+  border: 2px solid var(--white);
+}
+.lobby-name {
+  font-size: 24px; font-style: italic; color: var(--white);
+  letter-spacing: 2px;
+}
+.lobby-edit-hint {
+  font-size: 12px; font-style: italic; color: rgba(255,255,255,0.3);
+  letter-spacing: 2px;
+}
+
 /* ===================================================================
    Room list & seats
    =================================================================== */
@@ -666,6 +698,31 @@ body {
   transition: transform 0.2s;
 }
 .btn-leave:hover { transform: skewX(-6deg) scale(1.05); color: var(--blood); border-color: var(--blood); }
+
+.btn-addbot {
+  padding: 12px 32px;
+  cursor: pointer; border: 3px solid #22c55e;
+  background: transparent; color: #22c55e;
+  font-size: 18px; font-style: italic;
+  transform: skewX(-6deg);
+  letter-spacing: 2px;
+  transition: transform 0.2s;
+}
+.btn-addbot:hover { transform: skewX(-6deg) scale(1.05); background: #22c55e; color: var(--black); }
+
+.seat-card.seat-ai { border-color: rgba(34,197,94,0.4); }
+.seat-card.seat-ai .seat-name { color: #22c55e; }
+
+.btn-seat-remove {
+  margin-top: 4px; padding: 2px 12px;
+  cursor: pointer; border: 2px solid var(--blood);
+  background: transparent; color: var(--blood);
+  font-size: 11px; font-style: italic;
+  letter-spacing: 1px;
+  transform: skewX(-4deg);
+  transition: transform 0.2s;
+}
+.btn-seat-remove:hover { transform: skewX(-4deg) scale(1.1); background: var(--blood); color: var(--white); }
 
 /* ===================================================================
    BOTTOM_PICK area

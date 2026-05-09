@@ -11,6 +11,7 @@ P5._hintIndex = 0;
 // ---- BOTTOM_PICK state ----
 var bottomPickSelected = [];
 var maxBottomPicks = 2;
+var bottomPickFlipping = false;
 
 // ===================================================================
 // renderGame — master game render
@@ -48,9 +49,10 @@ P5.renderGame = function(st) {
     var isMyBid = String(st.current_bidder) === String(me);
     if (bb) bb.style.display = isMyBid ? 'flex' : 'none';
     if (bl) {
+      var bidderName = (st.player_names && st.player_names[st.current_bidder]) || P5.PLAYER_NAMES[st.current_bidder] || 'OPPONENT';
       bl.textContent = isMyBid
         ? 'CALL THE SHOT (YOUR TURN)'
-        : 'WAITING FOR ' + ((st.current_bidder != null && P5.PLAYER_NAMES[st.current_bidder]) || 'OPPONENT') + ' TO BID...';
+        : 'WAITING FOR ' + bidderName + ' TO BID...';
     }
   } else {
     if (bo) bo.classList.remove('active');
@@ -65,7 +67,7 @@ P5.renderGame = function(st) {
     P5.renderBottomPickCards(st);
     var confirmBtn = document.getElementById('btn-confirm-pick');
     if (confirmBtn) confirmBtn.style.display = st.is_picking ? 'block' : 'none';
-  } else {
+  } else if (!bottomPickFlipping) {
     if (bpArea) bpArea.style.display = 'none';
     bottomPickSelected = [];
   }
@@ -82,10 +84,13 @@ P5.renderGame = function(st) {
   }
 
   // ================================================================
-  // Result overlay — END state
+  // Result overlay — END state only; force-hide otherwise
   // ================================================================
   if (st.state === 'END') {
     P5.renderEndScreen(st, me);
+  } else {
+    var ov = document.getElementById('result-overlay');
+    if (ov) ov.classList.remove('active');
   }
 
   // Render players, center, hand
@@ -108,7 +113,7 @@ P5.renderBottomPickCards = function(st) {
     card.className = 'pick-card-back';
     card.setAttribute('data-idx', i);
 
-    // Check if already picked
+    // Check if already picked (server state)
     if (st.bottom_pick_indices) {
       if (st.bottom_pick_indices[0] === i || st.bottom_pick_indices[1] === i) {
         card.classList.add('selected');
@@ -117,19 +122,18 @@ P5.renderBottomPickCards = function(st) {
       card.classList.add('selected');
     }
 
-    (function(idx) {
-      card.addEventListener('click', function() {
-        if (!st.is_picking) return;
-        var selIdx = bottomPickSelected.indexOf(idx);
-        if (selIdx >= 0) {
-          bottomPickSelected.splice(selIdx, 1);
-          card.classList.remove('selected');
-        } else if (bottomPickSelected.length < maxBottomPicks) {
-          bottomPickSelected.push(idx);
-          card.classList.add('selected');
-        }
-      });
-    })(i);
+    card.addEventListener('click', function(e) {
+      if (!st.is_picking) return;
+      var idx = parseInt(e.currentTarget.getAttribute('data-idx'));
+      var selIdx = bottomPickSelected.indexOf(idx);
+      if (selIdx >= 0) {
+        bottomPickSelected.splice(selIdx, 1);
+        e.currentTarget.classList.remove('selected');
+      } else if (bottomPickSelected.length < maxBottomPicks) {
+        bottomPickSelected.push(idx);
+        e.currentTarget.classList.add('selected');
+      }
+    });
 
     ctr.appendChild(card);
   }
@@ -137,6 +141,14 @@ P5.renderBottomPickCards = function(st) {
 
 P5.confirmBottomPick = function() {
   if (bottomPickSelected.length !== 2) return;
+  // Animate flip on selected cards
+  var cards = document.querySelectorAll('.pick-card-back.selected');
+  for (var k = 0; k < cards.length; k++) {
+    cards[k].classList.add('flip-card');
+  }
+  // Freeze area for 600ms so flip animation can play before server hides it
+  bottomPickFlipping = true;
+  setTimeout(function() { bottomPickFlipping = false; }, 600);
   P5.post({action:'PICK_BOTTOM', indices: bottomPickSelected.slice()});
   bottomPickSelected = [];
 };
@@ -203,15 +215,22 @@ P5.renderEndScreen = function(st, me) {
   var winner = st.winner;
   var winnerIsLandlord = (st.landlords||[]).includes(winner);
   var win = imLandlord === winnerIsLandlord;
+  var isLastRound = st.current_round >= st.total_rounds;
 
   if (title) {
-    title.textContent = win ? 'VICTORY' : 'DEFEAT';
-    title.style.color = win ? 'var(--white)' : 'var(--blood)';
+    if (isLastRound) {
+      title.textContent = 'FINAL RESULTS';
+      title.style.color = 'var(--white)';
+    } else {
+      title.textContent = win ? 'VICTORY' : 'DEFEAT';
+      title.style.color = win ? 'var(--white)' : 'var(--blood)';
+    }
   }
 
-  var isLastRound = st.current_round >= st.total_rounds;
   if (sub) {
-    sub.textContent = isLastRound ? 'FINAL RESULTS' : ('ROUND ' + st.current_round + '/' + st.total_rounds);
+    sub.textContent = isLastRound
+      ? (win ? 'YOU WIN THE MATCH' : 'YOU LOSE THE MATCH')
+      : ('ROUND ' + st.current_round + '/' + st.total_rounds);
   }
 
   // Score table
@@ -220,36 +239,92 @@ P5.renderEndScreen = function(st, me) {
     var roundScores = st.round_scores || [];
     var cumScores = st.cumulative_scores || [];
     var names = st.player_names || [];
+    var landlords = st.landlords || [];
 
     if (isLastRound) {
       // Final leaderboard: sort by cumulative_scores descending
       var sorted = [];
       for (var i = 0; i < 5; i++) {
-        sorted.push({idx: i, score: cumScores[i] || 0, name: names[i] || P5.PLAYER_NAMES[i]});
+        var name = names[i] || P5.PLAYER_NAMES[i];
+        var isLL = landlords.indexOf(i) >= 0;
+        sorted.push({idx: i, score: cumScores[i] || 0, name: name, isLandlord: isLL});
       }
       sorted.sort(function(a, b) { return b.score - a.score; });
+
+      // Header row
+      var hdr = document.createElement('div');
+      hdr.className = 'score-row p5-font';
+      hdr.style.cssText = 'border-color:rgba(255,255,255,0.3);margin-bottom:4px;';
+      hdr.innerHTML = '<span class="score-name" style="font-size:12px;letter-spacing:2px;">RANK  PLAYER</span>' +
+                      '<span class="score-val" style="font-size:12px;">SCORE</span>';
+      scoresEl.appendChild(hdr);
 
       for (var j = 0; j < sorted.length; j++) {
         var row = document.createElement('div');
         row.className = 'score-row p5-font';
         if (j === 0) row.classList.add('gold');
         var valClass = sorted[j].score >= 0 ? 'positive' : 'negative';
-        row.innerHTML = '<span class="score-name">#' + (j+1) + ' ' + sorted[j].name + '</span>' +
+        var teamTag = sorted[j].isLandlord ? ' [地主]' : ' [农民]';
+        row.innerHTML = '<span class="score-name">#' + (j+1) + ' ' + sorted[j].name +
+                        '<span style="font-size:11px;opacity:0.6;">' + teamTag + '</span></span>' +
                         '<span class="score-val ' + valClass + '">' + (sorted[j].score >= 0 ? '+' : '') + sorted[j].score + '</span>';
         scoresEl.appendChild(row);
       }
+
+      // Team totals
+      var llTotal = 0, fmTotal = 0;
+      for (var i = 0; i < 5; i++) {
+        var sc = cumScores[i] || 0;
+        if (landlords.indexOf(i) >= 0) llTotal += sc; else fmTotal += sc;
+      }
+      var teamRow = document.createElement('div');
+      teamRow.className = 'score-row p5-font';
+      teamRow.style.cssText = 'border-color:rgba(255,255,255,0.3);margin-top:8px;';
+      teamRow.innerHTML = '<span class="score-name">TEAM TOTALS</span>' +
+                          '<span><span style="color:#22c55e;">地主 +' + Math.max(llTotal,0) + '</span>  ' +
+                          '<span style="color:var(--blood);">农民 +' + Math.max(fmTotal,0) + '</span></span>';
+      scoresEl.appendChild(teamRow);
     } else {
-      // Round scores
+      // Mid-round: round_scores + cumulative_scores + team tags
+      // Header
+      var hdr = document.createElement('div');
+      hdr.className = 'score-row p5-font';
+      hdr.style.cssText = 'border-color:rgba(255,255,255,0.3);margin-bottom:4px;';
+      hdr.innerHTML = '<span class="score-name" style="font-size:12px;letter-spacing:2px;">PLAYER</span>' +
+                      '<span><span class="score-val" style="font-size:12px;margin-right:32px;">ROUND</span>' +
+                      '<span class="score-val" style="font-size:12px;">TOTAL</span></span>';
+      scoresEl.appendChild(hdr);
+
       for (var i = 0; i < 5; i++) {
         var row = document.createElement('div');
         row.className = 'score-row p5-font';
-        var sc = roundScores[i] || 0;
-        var valClass = sc >= 0 ? 'positive' : 'negative';
+        var rs = roundScores[i] || 0;
+        var cs = cumScores[i] || 0;
+        var rClass = rs >= 0 ? 'positive' : 'negative';
+        var cClass = cs >= 0 ? 'positive' : 'negative';
         var displayName = names[i] || P5.PLAYER_NAMES[i];
-        row.innerHTML = '<span class="score-name">' + displayName + '</span>' +
-                        '<span class="score-val ' + valClass + '">' + (sc >= 0 ? '+' : '') + sc + '</span>';
+        var isLL = landlords.indexOf(i) >= 0;
+        var teamTag = isLL ? ' [地主]' : ' [农民]';
+        row.innerHTML = '<span class="score-name">' + displayName +
+                        '<span style="font-size:11px;opacity:0.6;">' + teamTag + '</span></span>' +
+                        '<span><span class="score-val ' + rClass + '" style="margin-right:32px;">' + (rs >= 0 ? '+' : '') + rs + '</span>' +
+                        '<span class="score-val ' + cClass + '">' + (cs >= 0 ? '+' : '') + cs + '</span></span>';
         scoresEl.appendChild(row);
       }
+
+      // Team totals
+      var llRound = 0, fmRound = 0;
+      for (var i = 0; i < 5; i++) {
+        var sc = roundScores[i] || 0;
+        if (landlords.indexOf(i) >= 0) llRound += sc; else fmRound += sc;
+      }
+      var teamRow = document.createElement('div');
+      teamRow.className = 'score-row p5-font';
+      teamRow.style.cssText = 'border-color:rgba(255,255,255,0.3);margin-top:8px;';
+      teamRow.innerHTML = '<span class="score-name">TEAM TOTALS</span>' +
+                          '<span><span style="color:#22c55e;">地主 ' + (llRound >= 0 ? '+' : '') + llRound + '</span>  ' +
+                          '<span style="color:var(--blood);">农民 ' + (fmRound >= 0 ? '+' : '') + fmRound + '</span></span>';
+      scoresEl.appendChild(teamRow);
     }
   }
 
@@ -260,13 +335,7 @@ P5.renderEndScreen = function(st, me) {
 };
 
 P5.clickContinue = function() {
-  var st = P5.getState();
-  if (st && st.current_round >= st.total_rounds) {
-    // Back to room
-    P5.post({action:'LEAVE_ROOM'});
-  } else {
-    P5.post({action:'CONTINUE'});
-  }
+  P5.post({action:'CONTINUE'});
   var ov = document.getElementById('result-overlay');
   if (ov) ov.classList.remove('active');
 };

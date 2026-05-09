@@ -18,6 +18,14 @@
      LAYER 1: LOBBY — 大厅
      ============================================================ -->
 <div id="screen-lobby" class="screen-layer">
+
+  <!-- 玩家身份条 -->
+  <div class="lobby-player-bar" id="lobby-player-bar" onclick="P5.openNameModal()">
+    <div class="lobby-avatar" id="lobby-avatar"></div>
+    <span class="lobby-name p5-font" id="lobby-name">PLAYER</span>
+    <span class="lobby-edit-hint p5-font">[EDIT]</span>
+  </div>
+
   <div class="lobby-buttons">
     <button class="btn-lobby" id="btn-single" onclick="P5.showSingleHint()">
       <span class="btn-lobby-text p5-font">单机模式</span>
@@ -34,7 +42,20 @@
       <div class="modal-title p5-font">ENTER YOUR NAME</div>
       <input id="input-name" class="modal-input p5-font" maxlength="12" placeholder="YOUR NAME" autocomplete="off">
       <div class="avatar-grid" id="avatar-grid"></div>
-      <button class="btn-modal-confirm p5-font" onclick="P5.confirmName()">CONFIRM</button>
+      <button class="btn-modal-confirm p5-font" id="btn-confirm" onclick="P5.confirmName()">CONFIRM</button>
+    </div>
+  </div>
+
+  <!-- 服务器地址弹窗 -->
+  <div class="modal-overlay" id="server-modal">
+    <div class="modal-box">
+      <div class="modal-title p5-font">SERVER ADDRESS</div>
+      <input id="input-host" class="modal-input p5-font" placeholder="127.0.0.1" autocomplete="off" style="width:220px;">
+      <input id="input-port" class="modal-input p5-font" placeholder="8080" autocomplete="off" style="width:100px;">
+      <div style="display:flex;gap:16px;">
+        <button class="btn-modal-confirm p5-font" onclick="P5.connectServer()">CONNECT</button>
+        <button class="btn-back p5-font" onclick="P5.cancelConnect()" style="position:static;transform:skewX(-6deg);">CANCEL</button>
+      </div>
     </div>
   </div>
 </div>
@@ -65,6 +86,7 @@
     <div class="room-seats" id="room-seats"></div>
     <div class="room-controls">
       <button class="btn-ready p5-font" id="btn-ready" onclick="P5.toggleReady()">READY</button>
+      <button class="btn-addbot p5-font" id="btn-addbot" onclick="P5.addBot()">+人机</button>
       <button class="btn-leave p5-font" onclick="P5.leaveRoom()">LEAVE</button>
     </div>
   </div>
@@ -162,6 +184,15 @@
 
 </div>
 
+<script>
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+window.onerror = function(msg, url, line) {
+  var el = document.createElement('div');
+  el.style.cssText = 'position:fixed;z-index:500;top:0;left:0;right:0;background:var(--blood);color:white;padding:10px;font-family:Impact,sans-serif;font-size:16px;font-style:italic;';
+  el.textContent = 'JS ERROR: ' + msg + ' [' + (url||'').split('/').pop() + ':' + line + ']';
+  document.body.appendChild(el);
+};
+</script>
 <script src="js/engine.js"></script>
 <script src="js/protocol.js"></script>
 <script src="js/lobby.js"></script>

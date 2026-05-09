@@ -43,6 +43,7 @@ private:
 class WebViewHost {
 public:
     using JSCallback = std::function<void(const std::string& json)>;
+    using ServerChangeCallback = std::function<void(const std::string& host, uint16_t port)>;
 
     WebViewHost();
     ~WebViewHost();
@@ -51,6 +52,7 @@ public:
     void Run();
     void PushState(const std::string& json);
     void SetOnJSMessage(JSCallback cb);
+    void SetOnServerChange(ServerChangeCallback cb);
 
 private:
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -66,6 +68,7 @@ private:
     EventRegistrationToken msg_token_;
 
     JSCallback js_callback_;
+    ServerChangeCallback server_change_cb_;
     std::wstring html_path_;
 
     std::mutex state_mutex_;

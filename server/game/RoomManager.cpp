@@ -543,6 +543,18 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
                 }
             }
         }
+        // ROOM_LIST — re-send current room list to this lobby player
+        if (json.find("\"ROOM_LIST\"") != std::string::npos ||
+            json.find("\"action\":\"ROOM_LIST\"") != std::string::npos) {
+            std::ostringstream ss;
+            ss << "{\"type\":\"room_list\",\"rooms\":[";
+            for (int i = 0; i < MAX_ROOMS; ++i) {
+                if (i > 0) ss << ",";
+                ss << rooms[i].SerializeRoomInfo(i + 1);
+            }
+            ss << "]}";
+            SendToPlayer(connections, fd, ss.str());
+        }
         return;
     }
 

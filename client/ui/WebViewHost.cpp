@@ -86,6 +86,10 @@ void WebViewHost::SetOnJSMessage(JSCallback cb) {
     js_callback_ = std::move(cb);
 }
 
+void WebViewHost::SetOnServerChange(ServerChangeCallback cb) {
+    server_change_cb_ = std::move(cb);
+}
+
 // ============================================================
 // Private
 // ============================================================
@@ -220,10 +224,35 @@ void WebViewHost::OnWebViewReady() {
         [this](ICoreWebView2* /*sender*/, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
             LPWSTR rawMsg = nullptr;
             if (SUCCEEDED(args->TryGetWebMessageAsString(&rawMsg)) && rawMsg) {
-                if (js_callback_) {
-                    js_callback_(WideToUtf8(rawMsg));
-                }
+                std::string msg = WideToUtf8(rawMsg);
                 CoTaskMemFree(rawMsg);
+
+                // Intercept SET_SERVER — trigger reconnect
+                if (msg.find("\"SET_SERVER\"") != std::string::npos ||
+                    msg.find("\"action\":\"SET_SERVER\"") != std::string::npos) {
+                    // Extract host
+                    std::string host = "127.0.0.1";
+                    size_t pos = msg.find("\"host\"");
+                    if (pos != std::string::npos) {
+                        pos = msg.find('"', pos + 6);
+                        if (pos != std::string::npos) {
+                            size_t end = msg.find('"', pos + 1);
+                            if (end != std::string::npos)
+                                host = msg.substr(pos + 1, end - pos - 1);
+                        }
+                    }
+                    // Extract port
+                    uint16_t port = 8080;
+                    pos = msg.find("\"port\"");
+                    if (pos != std::string::npos) {
+                        pos = msg.find(':', pos);
+                        if (pos != std::string::npos)
+                            port = static_cast<uint16_t>(std::stoi(msg.substr(pos + 1)));
+                    }
+                    if (server_change_cb_) server_change_cb_(host, port);
+                } else {
+                    if (js_callback_) js_callback_(msg);
+                }
             }
             return S_OK;
         }
@@ -253,16 +282,19 @@ void WebViewHost::OnWebViewReady() {
     std::wstring url = GetHTMLFullPath(html_path_);
     std::wcout << L"[WebViewHost] Loading: " << url << std::endl;
     webview_->Navigate(url.c_str());
+
+    // Flush any server messages that arrived before WebView2 was ready
+    FlushStateQueue();
 }
 
 void WebViewHost::FlushStateQueue() {
+    if (!webview_) return;  // WebView2 not ready yet — keep messages queued
+
     std::vector<std::string> states;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         states.swap(state_queue_);
     }
-
-    if (!webview_) return;
 
     for (const auto& json : states) {
         std::wstring wjson = Utf8ToWide(json);

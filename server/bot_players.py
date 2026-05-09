@@ -23,7 +23,7 @@ import sys
 # ===================================================================
 # 预设名字和头像颜色
 # ===================================================================
-BOT_NAMES = ["SKULL", "PANTHER", "FOX", "QUEEN", "JOKER"]
+BOT_AVATAR = 0   # 所有 bot 用同一个头像
 
 # ===================================================================
 # 协议工具函数
@@ -64,14 +64,10 @@ class BotPlayer:
         self.sock: socket.socket | None = None
         self.buffer = b""
         self.running = False
-        self.name = f"BOT_{bot_id}"
-        self.avatar = bot_id % 5
+        self.name = f"bot{bot_id + 1}"
+        self.avatar = BOT_AVATAR
         self.my_seat = -1
         self.hint_options = []
-
-        # 使用预设名字（如果 id 在范围内）
-        if bot_id < len(BOT_NAMES):
-            self.name = f"AI_{BOT_NAMES[bot_id]}"
 
     # ---- 连接与登录流程 ----
 
@@ -175,13 +171,8 @@ class BotPlayer:
     def _handle_bidding(self, msg: dict):
         cb = msg.get("current_bidder", -1)
         if cb == self.my_seat:
-            # 50% 概率叫地主
-            if random.random() < 0.5:
-                print(f"[{self.name}] CALL")
-                self.send({"action": "CALL"})
-            else:
-                print(f"[{self.name}] PASS (bidding)")
-                self.send({"action": "PASS"})
+            print(f"[{self.name}] CALL")
+            self.send({"action": "CALL"})
 
     def _handle_bottom_pick(self, msg: dict):
         if msg.get("is_picking") and msg.get("bottom_pick_landlord") == self.my_seat:
@@ -229,7 +220,7 @@ class BotPlayer:
 
 def main():
     parser = argparse.ArgumentParser(description="NexusCore Bot Players")
-    parser.add_argument("--count", type=int, default=5, help="机器人数量 (默认 5)")
+    parser.add_argument("--count", type=int, default=4, help="机器人数量 (默认 4)")
     parser.add_argument("--port", type=int, default=8080, help="服务器端口 (默认 8080)")
     parser.add_argument("--room", type=int, default=1, help="房间号 (默认 1)")
     parser.add_argument("--host", default="127.0.0.1", help="服务器地址 (默认 127.0.0.1)")

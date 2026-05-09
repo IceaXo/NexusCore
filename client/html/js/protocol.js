@@ -93,6 +93,13 @@ P5.renderAll = function(s) {
 // ---- PING heartbeat ----
 setInterval(function() { P5.post({action:'PING'}); }, 2000);
 
+// ---- WebView2 inbound bridge (C++ → JS) ----
+if (window.chrome && window.chrome.webview) {
+  window.chrome.webview.addEventListener('message', function(e) {
+    P5.updateState(e.data);
+  });
+}
+
 // ---- DOM ready ----
 window.addEventListener('DOMContentLoaded', function() {
   var ph = document.getElementById('phase-text');
