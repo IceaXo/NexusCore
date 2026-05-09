@@ -18,6 +18,7 @@ struct ServerConfig {
     int max_rooms = 5;
     int default_rounds = 5;
     int ipc_port = 8081;
+    int http_port = 7778;
 };
 
 class EpollServer {

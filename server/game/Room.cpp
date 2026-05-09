@@ -5,6 +5,7 @@
 #include <sstream>
 #include <cstring>
 #include <arpa/inet.h>
+#include <iostream>
 
 // ===================================================================
 // PlayerContext::RemoveCards
@@ -36,13 +37,15 @@ std::string Room::GenerateToken() {
 // ===================================================================
 void Room::ResetRoom() {
     for (int i = 0; i < 5; ++i) {
-        // 保留 name 和 avatar
+        // 保留 name、avatar、is_ai
         std::string saved_name = players[i].name;
         int saved_avatar = players[i].avatar;
+        bool saved_is_ai = players[i].is_ai;
         players[i] = PlayerContext{};
         players[i].name = saved_name;
         players[i].avatar = saved_avatar;
         players[i].fd = -1;
+        players[i].is_ai = saved_is_ai;
     }
     current_turn = 0;
     last_player_idx = -1;
@@ -58,6 +61,10 @@ void Room::ResetRoom() {
     bottom_pick_count = 0;
     bottom_pick_landlord = -1;
     for (int i = 0; i < 5; ++i) round_scores[i] = 0;
+    // AI 玩家自动就绪
+    for (int i = 0; i < 5; ++i) {
+        if (players[i].is_ai) players[i].is_ready = true;
+    }
     state = RoomState::WAITING;
 }
 
@@ -70,7 +77,12 @@ void Room::ReturnToWaiting() {
         players[i].is_landlord = false;
         players[i].has_passed_bidding = false;
         players[i].has_played = false;
-        players[i].is_ready = false;
+        // AI 或断线托管玩家自动就绪，真人重新等待准备
+        if (players[i].is_ai || (players[i].fd == -1 && !players[i].name.empty())) {
+            players[i].is_ready = true;
+        } else {
+            players[i].is_ready = false;
+        }
         // 保留 fd, name, avatar, reconnect_token
     }
     current_turn = 0;
@@ -88,7 +100,6 @@ void Room::ReturnToWaiting() {
     bottom_pick_landlord = -1;
     for (int i = 0; i < 5; ++i) round_scores[i] = 0;
     state = RoomState::WAITING;
-    // 注意：cumulative_scores 不清零，current_round/total_rounds 保留
 }
 
 // ===================================================================

@@ -169,12 +169,28 @@ bool RoomManager::JoinRoom(int fd, int room_id) {
         room.ResetRoom();
     }
 
-    // 找空座位
-    int seat = FindEmptySeat(room);
+    // 查找大厅中该 fd 对应的玩家信息
+    auto lobby_it = lobby_players.find(fd);
+    std::string lobby_name = (lobby_it != lobby_players.end()) ? lobby_it->second.name : "";
+    int lobby_avatar = (lobby_it != lobby_players.end()) ? lobby_it->second.avatar : 0;
+
+    // 先检查是否存在断线重连座位（神魂匹配）
+    int seat = -1;
+    for (int i = 0; i < 5; ++i) {
+        if (room.players[i].fd == -1 && !room.players[i].is_ai
+            && !lobby_name.empty() && room.players[i].name == lobby_name) {
+            seat = i;
+            break;
+        }
+    }
+
+    // 未匹配到断线座位 → 正常找空位
+    if (seat == -1) {
+        seat = FindEmptySeat(room);
+    }
     if (seat == -1) return false; // 满员
 
-    // 从大厅移除
-    auto lobby_it = lobby_players.find(fd);
+    // 从大厅移除并接管座位
     if (lobby_it != lobby_players.end()) {
         PlayerContext& player = room.players[seat];
         player.fd = fd;
@@ -243,6 +259,13 @@ void RoomManager::LeaveRoom(int fd) {
     if (room.owner_seat == player_idx) {
         room.TransferOwnership();
     }
+
+    // 有真人玩家离开 → 重置全员分数和局数，下一局从头开始
+    for (int i = 0; i < 5; ++i) {
+        room.cumulative_scores[i] = 0;
+        room.round_scores[i] = 0;
+    }
+    room.current_round = 0;
 
     // 如果没有真人玩家了，清空房间（包括人机）
     bool has_real_player = false;
@@ -520,6 +543,13 @@ void RoomManager::HandleRemoveBot(int room_idx, int seat) {
     if (room.owner_seat == seat) {
         room.TransferOwnership();
     }
+
+    // 有人离开（踢人机也算）→ 重置全员分数和局数
+    for (int i = 0; i < 5; ++i) {
+        room.cumulative_scores[i] = 0;
+        room.round_scores[i] = 0;
+    }
+    room.current_round = 0;
 
     room.BroadcastState();
     BroadcastRoomList();
