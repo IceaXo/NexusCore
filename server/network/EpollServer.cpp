@@ -2,6 +2,7 @@
 #include <cerrno>
 #include <ctime>
 #include <fcntl.h>
+#include "../util/Logger.h"
 
 EpollServer::EpollServer(const ServerConfig& cfg)
     : config(cfg), server_fd(-1), epoll_fd(-1) {}
@@ -75,7 +76,6 @@ void EpollServer::HandleAccept() {
 
         std::cout << "接客成功！新玩家号码牌: " << client_fd << std::endl;
         connections.emplace(client_fd, client_fd);
-        // 新玩家进入大厅，不再自动分配房间
         room_manager.AddToLobby(client_fd);
     }
 }
@@ -85,7 +85,7 @@ bool EpollServer::HandleRead(int fd) {
     if (it == connections.end()) return false;
 
     if (!it->second.ReadFromSocket()) {
-        std::cout << "玩家 " << fd << " 断开连接" << std::endl;
+        std::cout << room_manager.GetPlayerDesc(fd) << " 断开连接" << std::endl;
         room_manager.RemovePlayer(fd);
         epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
         close(fd);
@@ -98,7 +98,15 @@ bool EpollServer::HandleRead(int fd) {
     while (true) {
         std::string json_msg = it->second.ExtractMessage();
         if (it->second.bad_packet) {
-            std::cerr << "玩家 " << fd << " 发送超大非法包，踢掉" << std::endl;
+            static int bad_count = 0;
+            static time_t last_bad_log = 0;
+            bad_count++;
+            time_t now = time(nullptr);
+            if (now - last_bad_log >= 10) {
+                std::cerr << "[EpollServer] 过去 10 秒内踢掉 " << bad_count << " 个非法包连接" << std::endl;
+                bad_count = 0;
+                last_bad_log = now;
+            }
             room_manager.RemovePlayer(fd);
             epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
             close(fd);
@@ -106,7 +114,10 @@ bool EpollServer::HandleRead(int fd) {
             return false;
         }
         if (json_msg.empty()) break;
-        std::cout << "收到完整JSON: " << json_msg << std::endl;
+        if (json_msg.find("\"PING\"") == std::string::npos) {
+            Logger::Instance().Info(room_manager.GetPlayerDesc(fd) + " => " + json_msg);
+            std::cout << room_manager.GetPlayerDesc(fd) << " => " << json_msg << std::endl;
+        }
         room_manager.OnMessage(fd, json_msg);
     }
     return true;
@@ -116,7 +127,7 @@ void EpollServer::HandleWrite(int fd) {
     auto it = connections.find(fd);
     if (it != connections.end()) {
         if (!it->second.WriteToSocket()) {
-            std::cout << "玩家 " << fd << " 写出错，断开" << std::endl;
+            std::cout << room_manager.GetPlayerDesc(fd) << " 写出错断开" << std::endl;
             room_manager.RemovePlayer(fd);
             epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
             close(fd);
@@ -161,7 +172,7 @@ void EpollServer::Loop() {
         for (auto it = connections.begin(); it != connections.end(); ) {
             if (it->second.IsHeartbeatTimeout()) {
                 int stale_fd = it->first;
-                std::cout << "玩家 " << stale_fd << " 心跳超时，踢掉" << std::endl;
+                std::cout << room_manager.GetPlayerDesc(stale_fd) << " 心跳超时" << std::endl;
                 room_manager.RemovePlayer(stale_fd);
                 epoll_ctl(epoll_fd, EPOLL_CTL_DEL, stale_fd, nullptr);
                 close(stale_fd);
@@ -205,6 +216,11 @@ void EpollServer::Loop() {
                 bool alive = true;
                 if (revents & EPOLLIN) {
                     alive = HandleRead(fd);
+                    // HandleRead may queue outgoing data (BroadcastState).
+                    // Flush immediately — don't wait for EPOLLOUT, which may
+                    // never fire under edge-triggered epoll if the socket was
+                    // already writable.
+                    if (alive) HandleWrite(fd);
                 }
                 if (alive && (revents & EPOLLOUT)) {
                     HandleWrite(fd);

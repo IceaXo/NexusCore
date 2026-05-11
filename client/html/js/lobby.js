@@ -45,6 +45,7 @@ function updateLobbyBar() {
 // Confirm name
 // ===================================================================
 P5.confirmName = function() {
+  P5.playSFX('sfx_confirm.wav');
   var input = document.getElementById('input-name');
   myName = (input && input.value.trim()) ? input.value.trim().substring(0, 12) : 'PLAYER';
   myAvatar = selectedAvatar;
@@ -69,6 +70,7 @@ P5.onNameConfirmed = function(s) {
 
 // Re-open name modal from lobby
 P5.openNameModal = function() {
+  P5.playSFX('sfx_confirm.wav');
   var modal = document.getElementById('name-modal');
   var input = document.getElementById('input-name');
   if (modal) modal.classList.add('active');
@@ -81,17 +83,20 @@ P5.openNameModal = function() {
 // Lobby buttons
 // ===================================================================
 P5.showSingleHint = function() {
+  P5.playSFX('sfx_confirm.wav');
   var hint = document.getElementById('single-hint');
   if (hint) { hint.style.display = hint.style.display === 'none' ? 'inline' : 'none'; }
 };
 
 P5.enterRoomList = function() {
+  P5.playSFX('sfx_confirm.wav');
   // Show server address modal
   var modal = document.getElementById('server-modal');
   if (modal) modal.classList.add('active');
 };
 
 P5.connectServer = function() {
+  P5.playSFX('sfx_confirm.wav');
   var hostEl = document.getElementById('input-host');
   var portEl = document.getElementById('input-port');
   // Infer game server from the HTTP host that served this page.
@@ -123,11 +128,13 @@ P5.connectServer = function() {
 };
 
 P5.cancelConnect = function() {
+  P5.playSFX('sfx_back.wav');
   var modal = document.getElementById('server-modal');
   if (modal) modal.classList.remove('active');
 };
 
 P5.backToLobby = function() {
+  P5.playSFX('sfx_back.wav');
   var lobbyEl = document.getElementById('screen-lobby');
   var roomEl = document.getElementById('screen-room');
   if (lobbyEl) lobbyEl.style.display = 'block';
@@ -158,6 +165,7 @@ P5.renderRoomList = function(rooms) {
 };
 
 P5.joinRoom = function(roomId) {
+  P5.playSFX('sfx_confirm.wav');
   currentRoomId = roomId;
   P5.post({action:'JOIN_ROOM', room_id: roomId});
 
@@ -254,10 +262,12 @@ P5.renderRoomInside = function(st) {
 // Room actions
 // ===================================================================
 P5.toggleReady = function() {
+  P5.playSFX('sfx_confirm.wav');
   P5.post({action:'READY'});
 };
 
 P5.leaveRoom = function() {
+  P5.playSFX('sfx_back.wav');
   P5.post({action:'LEAVE_ROOM'});
   currentRoomId = 0;
   // Go back to room list
@@ -268,14 +278,17 @@ P5.leaveRoom = function() {
 };
 
 P5.setRounds = function(val) {
+  P5.playSFX('sfx_confirm.wav');
   P5.post({action:'SET_ROUNDS', rounds: parseInt(val)});
 };
 
 P5.addBot = function() {
+  P5.playSFX('sfx_confirm.wav');
   P5.post({action:'ADD_BOT'});
 };
 
 P5.removeBot = function(seat) {
+  P5.playSFX('sfx_confirm.wav');
   P5.post({action:'REMOVE_BOT', seat: seat});
 };
 

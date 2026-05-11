@@ -153,6 +153,7 @@ P5.renderHand = function() {
 
     // Click: toggle selection
     wrap.addEventListener('click', function() {
+      P5.playSFX('sfx_click.wav');
       if (selectedSet.has(i)) {
         selectedSet.delete(i);
         wrap.classList.remove('selected');

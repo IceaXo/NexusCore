@@ -953,6 +953,9 @@ std::string Room::SerializeState(int player_idx) const {
     }
     ss << "]";
 
+    // last_played_type
+    ss << ",\"last_played_type\":" << static_cast<int>(CardRule::EvaluateType(last_played_cards));
+
     // last_player
     ss << ",\"last_player\":" << last_player_idx;
 
@@ -964,6 +967,9 @@ std::string Room::SerializeState(int player_idx) const {
 
     // has_played
     ss << ",\"has_played\":" << (players[player_idx].has_played ? "true" : "false");
+
+    // is_autoplay — 客户端据此同步 UI
+    ss << ",\"is_autoplay\":" << (players[player_idx].is_autoplay ? "true" : "false");
 
     // player_names / player_avatars (all states)
     ss << ",\"player_names\":[";

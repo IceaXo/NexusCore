@@ -2,8 +2,10 @@
 #include <fstream>
 #include <sstream>
 #include <cstring>
+#include <ctime>
 #include "network/EpollServer.h"
 #include "network/HttpServer.h"
+#include "util/Logger.h"
 
 static ServerConfig LoadConfig(const std::string& path) {
     ServerConfig cfg;
@@ -48,6 +50,7 @@ int main(int argc, char* argv[]) {
 
     // 命令行参数
     std::string htmlRoot = "../client/html";
+    std::string logPath = "../../docs/server.log";
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--http-port") == 0 && i + 1 < argc) {
             config.http_port = std::stoi(argv[++i]);
@@ -55,7 +58,13 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[i], "--http-root") == 0 && i + 1 < argc) {
             htmlRoot = argv[++i];
         }
+        if (strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
+            logPath = argv[++i];
+        }
     }
+
+    Logger::Instance().Init(logPath);
+    Logger::Instance().InfoConsole("[main] 日志写入 " + logPath);
 
     // 启动 HTTP 静态文件服务器
     HttpServer httpServer;

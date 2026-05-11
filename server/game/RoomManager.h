@@ -67,6 +67,9 @@ public:
     Room* GetRoomByFd(int fd);
     int GetActiveRoomCount() const;
 
+    // 获取玩家描述字符串（fd + room + seat + name）
+    std::string GetPlayerDesc(int fd) const;
+
     // 判断玩家是否在大厅
     bool IsInLobby(int fd) const;
 

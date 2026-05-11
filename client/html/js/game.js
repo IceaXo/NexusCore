@@ -41,6 +41,13 @@ P5.renderGame = function(st) {
   if (bar) bar.style.display = isMyTurn ? 'flex' : 'none';
   if (wi) wi.style.display = (st.state === 'PLAYING' && !isMyTurn) ? 'block' : 'none';
 
+  // Autoplay UI — driven by server state
+  var autoBtn = document.getElementById('btn-autoplay');
+  if (autoBtn) {
+    if (st.is_autoplay) autoBtn.classList.add('active');
+    else autoBtn.classList.remove('active');
+  }
+
   // ================================================================
   // Bidding overlay — during BIDDING
   // ================================================================
@@ -71,6 +78,17 @@ P5.renderGame = function(st) {
     if (bpArea) bpArea.style.display = 'flex';
     if (st.bottom_pick_indices) bottomPickIndicesSaved = st.bottom_pick_indices.slice();
     if (typeof st.bottom_pick_landlord === 'number') bottomPickLandlordSaved = st.bottom_pick_landlord;
+    // Update title to show who is picking (matching BIDDING behaviour)
+    var pickTitle = bpArea ? bpArea.querySelector('.bottom-pick-title') : null;
+    if (pickTitle) {
+      var pickerSeat = bottomPickLandlordSaved;
+      if (st.is_picking) {
+        pickTitle.textContent = 'YOUR TURN TO PICK';
+      } else if (pickerSeat >= 0) {
+        var pickerName = (st.player_names && st.player_names[pickerSeat]) || P5.PLAYER_NAMES[pickerSeat] || ('P' + pickerSeat);
+        pickTitle.textContent = 'WAITING FOR ' + pickerName + ' TO PICK...';
+      }
+    }
     P5.renderBottomPickCards(st);
     var confirmBtn = document.getElementById('btn-confirm-pick');
     if (confirmBtn) confirmBtn.style.display = st.is_picking ? 'block' : 'none';
@@ -152,6 +170,7 @@ P5.renderBottomPickCards = function(st) {
 P5.confirmBottomPick = function() {
   if (P5._isAnimatingBottomPick) return;
   if (bottomPickSelected.length !== 2) return;
+  P5.playSFX('sfx_card_hover.wav');
   bottomPickIndicesSaved = bottomPickSelected.slice();
   P5.post({action:'PICK_BOTTOM', indices: bottomPickSelected.slice()});
   bottomPickSelected = [];
@@ -202,6 +221,7 @@ function buildFlipCard(cardVal) {
 }
 
 P5.playBottomPickAnimation = async function(st) {
+  P5.playSFX('sfx_card_hover.wav');
   var bpArea = document.getElementById('bottom-pick-area');
   var bpCards = document.getElementById('bottom-pick-cards');
   var confirmBtn = document.getElementById('btn-confirm-pick');
@@ -387,6 +407,8 @@ P5.renderEndScreen = function(st, me) {
   var win = imLandlord === winnerIsLandlord;
   var isLastRound = st.current_round >= st.total_rounds;
 
+  P5.setBgm(win ? 'win' : 'lose');
+
   if (title) {
     if (isLastRound) {
       title.textContent = 'FINAL RESULTS';
@@ -505,6 +527,8 @@ P5.renderEndScreen = function(st, me) {
 };
 
 P5.clickContinue = function() {
+  P5.playSFX('sfx_confirm.wav');
+  P5.setBgm('main');  // stop win/lose immediately, switch to room BGM
   P5.post({action:'CONTINUE'});
   var ov = document.getElementById('result-overlay');
   if (ov) ov.classList.remove('active');
@@ -514,12 +538,14 @@ P5.clickContinue = function() {
 // Game actions
 // ===================================================================
 P5.pass = function() {
+  P5.playSFX('sfx_confirm.wav');
   P5.selectedSet.clear();
   P5.renderHand();
   P5.post({action:'PASS'});
 };
 
 P5.hint = function() {
+  P5.playSFX('sfx_confirm.wav');
   if (P5._hintOptions.length > 0) {
     P5._hintIndex = (P5._hintIndex + 1) % P5._hintOptions.length;
     P5.selectHintOption();
@@ -565,6 +591,7 @@ P5.handleHint = function(resp) {
 // ---- Speed toggle (1x → 2x → 3x → 1x) ----
 P5._speedLevel = 1;
 P5.toggleSpeed = function() {
+  P5.playSFX('sfx_confirm.wav');
   P5._speedLevel = (P5._speedLevel % 3) + 1;  // 1→2→3→1
   var btn = document.getElementById('btn-speed');
   if (btn) {
@@ -577,20 +604,15 @@ P5.toggleSpeed = function() {
 };
 
 // ---- Autoplay toggle ----
-P5._autoplay = false;
 P5.toggleAutoplay = function() {
-  P5._autoplay = !P5._autoplay;
-  var btn = document.getElementById('btn-autoplay');
-  if (btn) {
-    if (P5._autoplay) btn.classList.add('active');
-    else btn.classList.remove('active');
-  }
+  P5.playSFX('sfx_confirm.wav');
   P5.post({action:'SET_AUTOPLAY'});
 };
 
 // ---- Bidding actions ----
-P5.bidCall = function() { P5.post({action:'CALL'}); };
+P5.bidCall = function() { P5.playSFX('sfx_confirm.wav'); P5.post({action:'CALL'}); };
 P5.bidPass = function() {
+  P5.playSFX('sfx_confirm.wav');
   P5.post({action:'PASS'});
 };
 

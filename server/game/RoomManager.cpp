@@ -160,59 +160,67 @@ bool RoomManager::JoinRoom(int fd, int room_id) {
 
     Room& room = rooms[room_idx];
 
-    // 如果所有真人已离开但房间还在游戏状态（人机残局），重置房间
-    bool all_disconnected = true;
-    for (int i = 0; i < 5; ++i) {
-        if (room.players[i].fd != -1) { all_disconnected = false; break; }
-    }
-    if (all_disconnected && room.state != RoomState::WAITING && room.state != RoomState::END) {
-        room.FullReset();
-    }
-
-    // 只允许加入 WAITING 或 END 状态的房间
-    if (room.state != RoomState::WAITING && room.state != RoomState::END) return false;
-    if (room.state == RoomState::END) {
-        room.ResetRoom();
-    }
-
     // 查找大厅中该 fd 对应的玩家信息
     auto lobby_it = lobby_players.find(fd);
     std::string lobby_name = (lobby_it != lobby_players.end()) ? lobby_it->second.name : "";
     int lobby_avatar = (lobby_it != lobby_players.end()) ? lobby_it->second.avatar : 0;
 
-    // 先检查是否存在断线重连座位（神魂匹配）
+    // 先检查是否存在断线重连座位（按名字匹配 fd==-1 的非AI真人）
     int seat = -1;
+    bool is_reconnect = false;
     for (int i = 0; i < 5; ++i) {
         if (room.players[i].fd == -1 && !room.players[i].is_ai
             && !lobby_name.empty() && room.players[i].name == lobby_name) {
             seat = i;
+            is_reconnect = true;
             break;
         }
     }
 
-    // 未匹配到断线座位 → 正常找空位
-    if (seat == -1) {
-        seat = FindEmptySeat(room);
-    }
-    if (seat == -1) return false; // 满员
+    // 断线重连：允许加入任何状态的房间
+    if (is_reconnect) {
+        // 直接接管原有座位
+    } else {
+        // 如果所有真人已离开但房间还在游戏状态（人机残局），重置房间
+        bool all_disconnected = true;
+        for (int i = 0; i < 5; ++i) {
+            if (room.players[i].fd != -1) { all_disconnected = false; break; }
+        }
+        if (all_disconnected && room.state != RoomState::WAITING && room.state != RoomState::END) {
+            room.FullReset();
+        }
 
-    // 从大厅移除并接管座位
+        // 只允许加入 WAITING 或 END 状态的房间（非重连）
+        if (room.state != RoomState::WAITING && room.state != RoomState::END) return false;
+        if (room.state == RoomState::END) {
+            room.ResetRoom();
+        }
+
+        // 正常找空位
+        seat = FindEmptySeat(room);
+        if (seat == -1) return false; // 满员
+    }
+
+    // 接管座位
     if (lobby_it != lobby_players.end()) {
         PlayerContext& player = room.players[seat];
         player.fd = fd;
-        player.name = lobby_it->second.name;
-        player.avatar = lobby_it->second.avatar;
-        player.is_ready = false;
+        if (!is_reconnect) {
+            player.name = lobby_it->second.name;
+            player.avatar = lobby_it->second.avatar;
+            player.is_ready = false;
+        }
         lobby_players.erase(lobby_it);
     } else {
-        // 不在大厅（重连等场景），直接分配
         room.players[seat].fd = fd;
-        room.players[seat].is_ready = false;
+        if (!is_reconnect) room.players[seat].is_ready = false;
     }
 
-    // 第一个进入的玩家成为房主
-    if (room.owner_seat == -1 || !room.IsSeatOccupied(room.owner_seat)) {
-        room.owner_seat = seat;
+    // 第一个进入的玩家成为房主（非重连场景）
+    if (!is_reconnect) {
+        if (room.owner_seat == -1 || !room.IsSeatOccupied(room.owner_seat)) {
+            room.owner_seat = seat;
+        }
     }
 
     fd_to_location[fd] = {room_idx, seat};
@@ -709,6 +717,7 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
             room.ai_scheduled_at = 0;
             CheckAndTriggerAI(it->second.room_idx);
         }
+        room.BroadcastState();
         return;
     }
 
@@ -723,6 +732,7 @@ void RoomManager::OnMessage(int fd, const std::string& json) {
         if (is_game_action && room.players[idx].is_autoplay) {
             room.players[idx].is_autoplay = false;
             room.ai_scheduled_at = 0;
+            room.BroadcastState();
         }
     }
 
@@ -1035,6 +1045,29 @@ Room* RoomManager::GetRoomByFd(int fd) {
     auto it = fd_to_location.find(fd);
     if (it == fd_to_location.end()) return nullptr;
     return &rooms[it->second.room_idx];
+}
+
+std::string RoomManager::GetPlayerDesc(int fd) const {
+    auto it = fd_to_location.find(fd);
+    if (it != fd_to_location.end()) {
+        const auto& player = rooms[it->second.room_idx].players[it->second.player_idx];
+        std::ostringstream ss;
+        ss << "[fd=" << fd << " room=" << (it->second.room_idx+1)
+           << " seat=" << it->second.player_idx;
+        if (!player.name.empty()) ss << " " << player.name;
+        ss << "]";
+        return ss.str();
+    }
+    // 可能在大厅
+    auto lobby = lobby_players.find(fd);
+    if (lobby != lobby_players.end()) {
+        std::ostringstream ss;
+        ss << "[fd=" << fd << " lobby";
+        if (!lobby->second.name.empty()) ss << " " << lobby->second.name;
+        ss << "]";
+        return ss.str();
+    }
+    return "[fd=" + std::to_string(fd) + " unknown]";
 }
 
 // ===================================================================

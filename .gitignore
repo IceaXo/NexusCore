@@ -48,7 +48,11 @@ server/agent/test_client.py
 server/agent/test_smoke.py
 server/agent/test_integration.py
 
-# Design notes
+# Docs (local only)
+docs/
+
+# Audio assets (large, first-time manual upload)
+client/html/audio/
 cssui.md
 p5.md
 C++ UI渲染方案重构.md

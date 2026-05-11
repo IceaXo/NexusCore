@@ -4,6 +4,8 @@
 #include <sstream>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -16,6 +18,8 @@ static std::string GetMimeType(const std::string& path) {
     if (path.find(".png")  != std::string::npos) return "image/png";
     if (path.find(".svg")  != std::string::npos) return "image/svg+xml";
     if (path.find(".json") != std::string::npos) return "application/json; charset=utf-8";
+    if (path.find(".mp3")  != std::string::npos) return "audio/mpeg";
+    if (path.find(".wav")  != std::string::npos) return "audio/wav";
     return "application/octet-stream";
 }
 
@@ -64,6 +68,10 @@ void HttpServer::Loop() {
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    // 监听 socket 设为非阻塞，避免 accept() 卡死
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -82,10 +90,22 @@ void HttpServer::Loop() {
     }
 
     while (running_) {
-        sockaddr_in client{};
-        socklen_t len = sizeof(client);
-        int cfd = accept(fd, (sockaddr*)&client, &len);
-        if (cfd < 0) continue;
+        int cfd = accept(fd, nullptr, nullptr);
+        if (cfd < 0) {
+            // 非阻塞模式：没有连接时短暂 sleep，让出 CPU 并检查 running_
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            continue;
+        }
+
+        // 设置客户端 socket 超时，防止慢客户端卡死整个 HTTP 服务
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(cfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
         char buf[4096];
         int n = recv(cfd, buf, sizeof(buf) - 1, 0);
@@ -110,7 +130,7 @@ void HttpServer::Loop() {
             std::string body = "403 Forbidden";
             std::string resp = "HTTP/1.1 403 Forbidden\r\nContent-Length: " +
                 std::to_string(body.size()) + "\r\n\r\n" + body;
-            send(cfd, resp.c_str(), resp.size(), 0);
+            send(cfd, resp.c_str(), resp.size(), MSG_NOSIGNAL);
             close(cfd);
             continue;
         }
@@ -131,7 +151,14 @@ void HttpServer::Loop() {
                 std::to_string(content.size()) + "\r\n\r\n" + content;
         }
 
-        send(cfd, response.c_str(), response.size(), MSG_NOSIGNAL);
+        // 循环发送直到完成或超时（SO_SNDTIMEO 保证了不会永久阻塞）
+        size_t total_sent = 0;
+        while (total_sent < response.size()) {
+            ssize_t sent = send(cfd, response.c_str() + total_sent,
+                                response.size() - total_sent, MSG_NOSIGNAL);
+            if (sent <= 0) break;
+            total_sent += sent;
+        }
         close(cfd);
     }
 
