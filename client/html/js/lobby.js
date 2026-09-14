@@ -100,11 +100,17 @@ P5.connectServer = function() {
   var hostEl = document.getElementById('input-host');
   var portEl = document.getElementById('input-port');
   // Infer game server from the HTTP host that served this page.
-  // If loaded via file://, fall back to hardcoded address.
-  var defaultHost = window.location.hostname || '8.134.18.58';
-  var defaultPort = '7777';
+  // Local files use the local development server by default.
+  var defaultHost = window.location.hostname || '127.0.0.1';
+  var defaultPort = '8080';
   var host = (hostEl && hostEl.value.trim()) ? hostEl.value.trim() : defaultHost;
-  var port = parseInt(portEl && portEl.value.trim() ? portEl.value.trim() : defaultPort);
+  var portText = portEl && portEl.value.trim() ? portEl.value.trim() : defaultPort;
+  var port = Number(portText);
+  if (!/^\d+$/.test(portText) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    if (portEl) { portEl.setCustomValidity('请输入 1–65535 之间的端口'); portEl.reportValidity(); }
+    return;
+  }
+  if (portEl) portEl.setCustomValidity('');
   P5.post({action:'SET_SERVER', host: host, port: port});
 
   var modal = document.getElementById('server-modal');

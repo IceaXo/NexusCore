@@ -198,7 +198,7 @@ void WebViewHost::OnWebViewReady() {
                 if (msg.find("\"SET_SERVER\"") != std::string::npos ||
                     msg.find("\"action\":\"SET_SERVER\"") != std::string::npos) {
                     // Extract host
-                    std::string host = "8.134.18.58";
+                    std::string host = "127.0.0.1";
                     size_t pos = msg.find("\"host\"");
                     if (pos != std::string::npos) {
                         pos = msg.find('"', pos + 6);
@@ -209,12 +209,17 @@ void WebViewHost::OnWebViewReady() {
                         }
                     }
                     // Extract port
-                    uint16_t port = 7777;
+                    uint16_t port = 8080;
                     pos = msg.find("\"port\"");
                     if (pos != std::string::npos) {
                         pos = msg.find(':', pos);
-                        if (pos != std::string::npos)
-                            port = static_cast<uint16_t>(std::stoi(msg.substr(pos + 1)));
+                        if (pos != std::string::npos) {
+                            try {
+                                const int parsedPort = std::stoi(msg.substr(pos + 1));
+                                if (parsedPort < 1 || parsedPort > 65535) return S_OK;
+                                port = static_cast<uint16_t>(parsedPort);
+                            } catch (...) { return S_OK; }
+                        }
                     }
                     if (server_change_cb_) server_change_cb_(host, port);
                 } else {
