@@ -42,4 +42,8 @@ cd server
 
 这不包含 epoll 服务运行、Windows WebView2 联调、重连异常、真实模型或并发压测。旧文档中的万级连接等数字继续保留为历史设计目标，不当作当前测量结果。
 
+## 后续应用：OneStepCards
+
+五人斗地主的规则、阶段流转和测试向量后来被迁移到 Godot 的多玩法应用 OneStepCards。它使用 Steam 大厅与房主权威状态，复用牌桌、设置和更新器。迁移对象与原 C++ 网络原型各有分工，详见 [NexusCore → OneStepCards](ONESTEPCARDS_EVOLUTION.md)。
+
 [返回首页](../README.md)

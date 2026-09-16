@@ -2,9 +2,13 @@
 
 [完整项目导读：流程、设计取舍与验证](docs/PROJECT_GUIDE.md)
 
+[后续演进：NexusCore → OneStepCards](docs/ONESTEPCARDS_EVOLUTION.md)
+
 以五人牌局为业务载体，实践 Linux epoll 网络、消息分帧、服务端规则校验、断线恢复，以及 Python 大模型托管。客户端由 Windows C++ 宿主与 WebView2 UI 组成。
 
 个人实践覆盖网络层与游戏逻辑分离、房间状态流转、C++/Python 消息桥接和客户端集成。模型负责提出行动，C++ 规则层仍需验证该行动；当前定位为原型，不承诺生产容量或服务等级。
+
+这段实践后来延续到 **OneStepCards**：将五人斗地主规则与状态机迁移到 Godot，在统一牌桌中接入 Steam 大厅、联机和更新流程，并与跑得快、德州玩法共用应用外壳。本仓库保留 C++ 阶段源码；两个阶段的职责变化与迁移范围见[演进说明](docs/ONESTEPCARDS_EVOLUTION.md)。
 
 ## 现有功能与入口
 
